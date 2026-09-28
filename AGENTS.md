@@ -230,6 +230,7 @@
 | `files/etc/init.d/xray` | **覆盖**官方 init：启动前兜底创建运行身份，并以 `xray` 用户/组（gid 966）运行 |
 | `files/etc/uci-defaults/zzz-xray-user` | 首次开机创建 `xray` 用户/组（uid 0 / gid 966），与 nft 规则里的 `skgid 966` 对应 |
 | `files/etc/config/xray` | 预置 xray 的 uci 配置：`enabled=1` + `confdir=/etc/xray`（配置文件需自备 `config.json`） |
+| `files/etc/nginx/nginx.conf` | nginx **自管配置**（uci_enable=false 时接管）：加载 `module.d/*.module`、`http` 段 include `conf.d/*.conf`、顶层 `stream` 段 include `stream.d/*.conf`；**不监听 80/443**，仅用于自定义端口反代 |
 | `files/etc/adguardhome/adguardhome.yaml` | AdGuardHome 主配置（官方方案的 `config_file`）。内容已按本地环境调整（见 UC-0010），包方案见 UC-0011 |
 | `files/etc/adguardhome/data/filters/` | AdGuardHome 工作目录（官方 `work_dir`，本地设为 `/etc/adguardhome`）下的订阅缓存，编译期由 `prepare.py` 下载刷新；二进制由官方 `adguardhome` 包编译提供，装到 `/usr/bin/AdGuardHome` |
 | `files/etc/AdGuardHome-dnslist(by cmzj).yaml` | 由 `prepare.py` **构建期下载生成**（不纳入版本控制）；当前主配置已清空 `upstream_dns_file`，该清单实际未被引用 |
@@ -239,6 +240,7 @@
 | `files/etc/uci-defaults/zzz-chenmozhijin` | 首次开机写入 LAN 地址、dnsmasq 缓存开关、aria2 配置、固件署名（AdGuardHome 相关已拆出，SmartDNS 相关随换用 mosdns 移除） |
 | `files/etc/uci-defaults/zzz-adguardhome` | AdGuardHome 首次开机配置（官方方案的 uci 选项 + dnsmasq 上游指向）；从 `zzz-chenmozhijin` 拆出，自带 `has_package` 与等待逻辑，不再使用时直接删本文件即可 |
 | `files/etc/uci-defaults/zzz-mosdns` | 启用并启动 mosdns（mosdns 包的 postinst 会 stop + disable，必须显式 enable）；配置缺失时不启动 |
+| `files/etc/uci-defaults/zzz-nginx` | 关闭 nginx 的 uci 管理（`nginx.global.uci_enable=false`）使自管 `nginx.conf` 接管，并清理可能残留的 uci.conf、启用服务 |
 | `files/usr/share/cmzj/openwrt-k_tool.sh` | 让固件支持 `openwrt-k` 命令升级非官方源软件包 |
 
 ### 4.3 补丁

@@ -85,6 +85,8 @@
 | UC-0011 | 2026-09-28 | 配置改动 | AdGuardHome 改用官方 openwrt 方案（官方 `luci-app-adguardhome` + `adguardhome` 守护进程包），放弃第三方实现 | `config/{x86_64,rpi4b}/{OpenWrt-K/local.config,network.config}`、`files/etc/uci-defaults/zzz-chenmozhijin`、`files/etc/adguardhome/adguardhome.yaml`、`build_helper/prepare.py` | 中 | 保留本地配置；上游若也切到官方实现，本条可撤销 |
 | UC-0012 | 2026-09-28 | 预置文件 | 把 AdGuardHome 的 uci-defaults 逻辑从 `zzz-chenmozhijin` 拆成独立文件 | `files/etc/uci-defaults/zzz-adguardhome`（新增）、`files/etc/uci-defaults/zzz-chenmozhijin` | 低 | 保留拆分 |
 | UC-0013 | 2026-09-28 | 配置改动 | DNS 分流器由 SmartDNS 换为 mosdns（不装 LuCI 界面、配置由使用者自备 YAML；SmartDNS 的上游行原样保留，关闭语义集中在 local.config） | `config/{x86_64,rpi4b}/network.config`（仅新增 mosdns 行）、`config/{x86_64,rpi4b}/OpenWrt-K/local.config`（关闭 SmartDNS 开关）、`files/etc/uci-defaults/zzz-chenmozhijin`、`files/etc/uci-defaults/zzz-adguardhome`、`files/etc/mosdns/config.yaml`（使用者提供）、`files/etc/uci-defaults/zzz-mosdns`、`build_helper/prepare.py`、`README.md`、`AGENTS.md` | 低 | 保留本地选择；上游若同样切换到 mosdns，本条可撤销 |
+| UC-0014 | 2026-09-29 | 配置改动 | 加入 nginx（自管配置，仅用于自定义端口反向代理内网服务；不接管 LuCI、不占 80/443） | `config/{x86_64,rpi4b}/network.config`（仅新增 3 行）、`files/etc/nginx/nginx.conf`、`files/etc/uci-defaults/zzz-nginx`、`AGENTS.md` | 低 | 保留本地选择 |
+| UC-0015 | 2026-09-29 | 配置改动 | 升级 Go 工具链分支 25.x → 26.x，适配官方 `adguardhome` 包 `go.mod` 的 `go >= 1.26.3` 要求 | `config/{x86_64,rpi4b}/OpenWrt-K/openwrtext.config` | 低 | 保留本地取值；上游若同步升级可撤销 |
 
 > 编号规则：`UC-####` 起顺序递增，**永不复用、永不重排**；撤销的条目保留行并标注"已撤销 + 日期 + 原因"。
 
@@ -419,6 +421,59 @@
   - 如需恢复 SmartDNS：删掉 `local.config` 中的那 5 行即可重新启用 feed 版；若要恢复成 pymumu 上游版本（并跳过下载 hash 校验），还需在 `prepare.py` 中恢复对应的克隆与替换逻辑（已随本条删除）；
   - 顺手清掉一处悬空配置：原 SmartDNS 段中的 `when_chnroute_default_dns='chinadns_ng'` 指向已被排除的 `chinadns-ng`（UC-0006），随本段删除一并消失。
 - 文档同步：AGENTS.md 第 3.2 / 4.2 / 5 / 7 / 10 节已更新 ☑
+- 相关提交：——
+
+
+### UC-0014 · 配置改动 · 加入 nginx（自管配置，仅用于自定义端口反代）
+
+- 日期：2026-09-29
+- 变更类型：配置改动
+- 涉及文件：
+  - config/x86_64/network.config、config/rpi4b/network.config（**仅新增** `nginx-ssl`、`nginx-ssl-util`、`nginx-mod-stream` 三个开关）
+  - files/etc/nginx/nginx.conf（**新增**，本地自管配置）
+  - files/etc/uci-defaults/zzz-nginx（**新增**，关闭 uci 管理、清理残留、启用服务）
+  - AGENTS.md
+- 上游对照：上游不含 nginx（LuCI 由 uhttpd 承载），本仓库此前亦无
+- 本地行为：
+  - 启用 `nginx-ssl`（默认变体；反代所需编译期模块默认即为 y —— `NGINX_HTTP_PROXY`、`NGINX_HTTP_REWRITE`（并 `select NGINX_PCRE`）、`NGINX_HTTP_CACHE`、`NGINX_HTTP_V2`、`NGINX_HTTP_UPSTREAM_*` 等）、`nginx-ssl-util`（TLS 辅助工具）与 `nginx-mod-stream`（TCP/UDP 反代模块）；
+  - **不接管 LuCI**：不启用 `luci-nginx` 与 `nginx-mod-luci`，`uhttpd` 保持原样；亦未启用 `nginx-mod-ubus`（它服务于 LuCI 集成，本用途不需要）；
+  - **关闭 uci 管理**（`nginx.global.uci_enable=false`），使随固件预置的 `/etc/nginx/nginx.conf` 接管。依据：init 的 `nginx_init()` 按「`/etc/nginx/uci.conf` 存在则优先用它，否则用 `/etc/nginx/nginx.conf`」选择配置，而 `nginx-util` 的 `init_lan()` 仅在 `uci_enable=true` 时才生成 `/var/lib/nginx/uci.conf`（实测其源码：`if (config_enabled) { init_uci(...) }`）；
+  - **不占用 80/443**：包自带的 UCI 默认值会生成 `server '_redirect2ssl'`（`listen 80`）与 `server '_lan'`（`listen 443 ssl default_server`），关闭 uci 管理后这两个 server 不再生成，避免与 `uhttpd` 争抢 80；
+  - `zzz-nginx` 额外清理可能残留的 `/var/lib/nginx/uci.conf` 与 `/etc/nginx/uci.conf`（设备曾以 uci 模式运行过时的兜底，避免旧的 uci.conf 被优先选用）。
+- 变更原因：使用者需要在自定义端口上反向代理内网服务（含 TCP/UDP），且明确不占用 80/443、不接管 LuCI。
+- 冲突风险：低 —— 上游配置文件只新增行；`files/` 下均为独立新文件
+- 上游同步动作：保留本地选择
+- 注意事项：
+  - 模块加载依赖自管配置里的 `include module.d/*.module;`（由 `nginx-mod-*` 包安装，例如 `stream.module` 内含 `load_module .../ngx_stream_module.so`）；缺少它会让 `stream {}` 报 unknown directive，**勿删**；
+  - `pid /var/run/nginx.pid;` 必须与 init 脚本的 reload 判定保持一致（该脚本读取 `/var/run/nginx.pid`），**勿删**；
+  - HTTP(S) 的 server 块放 `/etc/nginx/conf.d/*.conf`；TCP/UDP（stream）的 server 块放 `/etc/nginx/stream.d/*.conf`（该目录需自建；`stream` 只能位于顶层，不能写进 `http {}` 内）；
+  - 自管模式不再有 UCI 的 `uci_manage_ssl='self-signed'` 自签逻辑，需要 HTTPS 反代时用 `nginx-ssl-util` 生成证书或自备证书；
+  - nginx 包自带配置监听 80/443 属"包默认值"，本方案通过关闭 uci 管理使其失效；若日后重新打开 uci_enable，需自行改 `listen` 或删除那两个 server 段。
+- 文档同步：AGENTS.md 第 4.2 节已更新 ☑
+- 相关提交：——
+
+
+### UC-0015 · 配置改动 · 升级 Go 工具链至 26.x（修复 adguardhome 构建失败）
+
+- 日期：2026-09-29
+- 变更类型：配置改动
+- 涉及文件：
+  - config/x86_64/OpenWrt-K/openwrtext.config（`golang_version=25.x` → `26.x`）
+  - config/rpi4b/OpenWrt-K/openwrtext.config（同上）
+- 上游对照：上游该键为 `25.x`
+- 本地行为：`prepare.py` 用 `sbwml/packages_lang_golang` 的对应分支整体替换 `feeds/packages/lang/golang`；分支 `26.x` 提供 **Go 1.26.8**（该分支 `golang/Makefile` 中 `GO_VERSION_MAJOR_MINOR:=1.26`、`GO_VERSION_PATCH:=8`）。
+- 变更原因：UC-0011 改用官方 `adguardhome` 包（**源码 Go 编译**）后，其 v0.107.76 的 `go.mod` 声明 `go 1.26.3`，而 `25.x` 分支提供的是 Go 1.25.14，导致 CI 构建失败：
+  `go: ../../go.mod requires go >= 1.26.3 (running go 1.25.14; GOTOOLCHAIN=local)` →
+  `package/feeds/packages/adguardhome failed to build`（`GOTOOLCHAIN=local` 禁止自动下载更高工具链）。抬到 26.x（Go 1.26.8）后满足要求。
+- 冲突风险：低 —— 仅改一处版本号
+- 上游同步动作：保留本地取值；若上游也升级到 26.x，本条可撤销
+- 注意事项：
+  - Go 1.x 保持向后兼容，仓库内其它 Go 包（`xray-core` / `mosdns` / `ddns-go` / `easytier` 等）不受影响；代价是构建时间增加（Go 工具链自身需重新编译）；
+  - `sbwml/packages_lang_golang` 的分支命名形如 `NN.x`（`19.x` … `27.x`），**不是** `1.26` 这种写法；
+  - 日后 AdGuardHome 上游若继续抬高 `go.mod` 要求，需同步把本键调到对应分支（`27.x` 等）；
+  - 若 26.x 工具链本身构建异常，退路是放弃"源码编译官方包"、改回构建期下载 AdGuardHome 官方预编译二进制（UC-0009 的做法）；
+  - `config_build_tool.sh` 内有两处 `22.x` 与该键相关（生成/重置配置时的默认值），不是当前生效值，未改动。
+- 文档同步：AGENTS.md 无需改动（4.1 插件表与 3.2 特殊处理表均未变）☑
 - 相关提交：——
 
 ### 新增条目模板

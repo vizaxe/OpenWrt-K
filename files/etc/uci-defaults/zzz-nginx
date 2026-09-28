@@ -1,0 +1,34 @@
+#!/bin/sh
+# nginx 首次开机设置：关闭 uci 管理，改用预置的 /etc/nginx/nginx.conf 自管配置
+#
+# 背景：/etc/init.d/nginx 的 nginx_init() 判定顺序是
+#   [ -e /etc/nginx/uci.conf ] -> 用 uci.conf；否则 -> 用 /etc/nginx/nginx.conf
+# 而 /var/lib/nginx/uci.conf（uci.conf 的实际生成物）只在 uci_enable=true 时由
+# nginx-util 的 init_lan() 生成。因此这里把 uci_enable 设为 false，
+# 让随固件预置的 /etc/nginx/nginx.conf 接管（它不监听 80/443，仅用于自定义端口反代）。
+
+has_package() {
+  if command -v apk >/dev/null 2>&1; then
+    apk info -e "$1" >/dev/null 2>&1
+  else
+    opkg list-installed 2>/dev/null | grep -Eq "^$1( - |$)"
+  fi
+}
+
+# 等待包数据库就绪（与其它 uci-defaults 脚本一致的做法）
+until has_package kernel; do
+  sleep 1
+done
+
+if has_package nginx-ssl;then
+  uci set nginx.global.uci_enable='false'
+  uci commit nginx
+  # 清理可能残留的 uci 生成物：只要 /etc/nginx/uci.conf 存在（且其目标有效），
+  # nginx_init() 就会优先使用它，本地 nginx.conf 反而不生效。
+  # 全新刷机时这两个文件本就不存在，此处仅作兜底（例如设备此前以 uci 模式运行过）。
+  rm -f /var/lib/nginx/uci.conf /etc/nginx/uci.conf
+  /etc/init.d/nginx enable
+  /etc/init.d/nginx restart
+fi
+
+exit 0
