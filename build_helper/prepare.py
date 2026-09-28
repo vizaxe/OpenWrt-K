@@ -14,6 +14,7 @@ import pygit2
 
 from .utils.downloader import DLTask, dl2, wait_dl_tasks
 from .utils.error import ConfigError, ConfigParseError
+from .utils.local_exclude import filter_config_text, filter_extpackages, load_local_exclude
 from .utils.logger import logger
 from .utils.network import get_gh_repo_last_releases, request_get
 from .utils.openwrt import OpenWrt
@@ -76,6 +77,13 @@ def parse_configs() -> dict[str, dict[str, Any]]:
     if not configs:
         msg = "没有找到任何可用配置文件"
         raise ConfigError(msg)
+    # 应用本地排除清单(纯增量机制: 清单文件缺失时不排除任何内容, 行为与上游一致)
+    for config in configs.values():
+        exclude_extpackages, exclude_configs = load_local_exclude(config["path"])
+        if exclude_extpackages:
+            config["extpackages"] = filter_extpackages(config["extpackages"], exclude_extpackages)
+        if exclude_configs:
+            config["openwrt"] = filter_config_text(config["openwrt"], exclude_configs)
     return configs
 
 def get_matrix(configs: dict[str, dict]) -> str:
@@ -102,8 +110,6 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
     logger.info("开始克隆拓展软件源码...")
     to_clone: set[tuple[str, str]] = {("https://github.com/immortalwrt/packages", ""),
                                        ("https://github.com/chenmozhijin/turboacc", "package"),
-                                       ("https://github.com/pymumu/openwrt-smartdns", "master"),
-                                       ("https://github.com/pymumu/luci-app-smartdns", "master"),
                                        *[(pkg["REPOSITORIE"], pkg["BRANCH"]) for config in configs.values() for pkg in config["extpackages"].values()],
                                        *[("https://github.com/sbwml/packages_lang_golang",
                                           config["openwrtext"]["golang_version"]) for config in configs.values()]}
@@ -130,6 +136,9 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
                     with open(os.path.join(root, file), encoding="utf-8") as f:
                         content = f.read()
                     content = content.replace(r"../../luci.mk", r"$(TOPDIR)/feeds/luci/luci.mk")
+                    # 本地新增: 拓展包复制到 package/cmzj_packages/ 后, feed 内 golang 构建脚本的相对引用同样失效
+                    # (如 ddns-go 的 ../../lang/golang/golang-package.mk), 一并改写为 TOPDIR 下的真实路径
+                    content = content.replace(r"../../lang/golang/golang-package.mk", r"$(TOPDIR)/feeds/packages/lang/golang/golang-package.mk")
                     with open(os.path.join(root, file), "w", encoding="utf-8") as f:
                         f.write(content)
                     logger.info("修复%s中luci.mk的路径", os.path.join(root, file))
@@ -168,7 +177,7 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
     logger.info("下载AdGuardHome规则与配置...")
     global_files_path = os.path.join(paths.workdir, "files")
     shutil.copytree(os.path.join(paths.openwrt_k, "files"), global_files_path, symlinks=True)
-    adg_filters_path = os.path.join(global_files_path, "usr", "bin", "AdGuardHome", "data", "filters")
+    adg_filters_path = os.path.join(global_files_path, "etc", "adguardhome", "data", "filters")
     os.makedirs(adg_filters_path, exist_ok=True)
     filters = {"1628750870.txt": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
                "1628750871.txt": "https://anti-ad.net/easylist.txt",
@@ -212,24 +221,6 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
             logger.info("%s处理完成", cfg_name)
 
 
-def disable_smartdns_hash_check(makefile_path: str) -> None:
-    """禁用 smartdns 源码和 smartdns-webui 的下载 hash 校验。"""
-    with open(makefile_path, encoding="utf-8") as f:
-        content = f.read()
-
-    updated = re.sub(r"^PKG_MIRROR_HASH:=.*$", "PKG_MIRROR_HASH:=skip", content, flags=re.MULTILINE)
-    updated = re.sub(r"^(\s*)MIRROR_HASH:=.*$", r"\1MIRROR_HASH:=skip", updated, flags=re.MULTILINE)
-
-    if updated == content:
-        logger.warning("未在 %s 中找到可替换的 smartdns hash 校验字段", makefile_path)
-        return
-
-    with open(makefile_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(updated)
-
-    logger.info("已禁用 smartdns 下载 hash 校验: %s", makefile_path)
-
-
 def prepare_cfg(config: dict[str, Any],
                 cfg_name: str,
                 openwrt: OpenWrt,
@@ -239,19 +230,11 @@ def prepare_cfg(config: dict[str, Any],
     logger.info("%s开始更新feeds...", cfg_name)
     openwrt.feed_update()
 
-    logger.info("%s开始更新netdata、smartdns...", cfg_name)
+    logger.info("%s开始更新netdata...", cfg_name)
     # 更新netdata
     shutil.rmtree(os.path.join(openwrt.path, "feeds", "packages", "admin", "netdata"), ignore_errors=True)
     shutil.copytree(os.path.join(cloned_repos[("https://github.com/immortalwrt/packages", "")], "admin", "netdata"),
                         os.path.join(openwrt.path, "feeds", "packages", "admin", "netdata"), symlinks=True)
-    # 更新smartdns
-    shutil.rmtree(os.path.join(openwrt.path, "feeds", "luci", "applications", "luci-app-smartdns"), ignore_errors=True)
-    shutil.rmtree(os.path.join(openwrt.path, "feeds", "packages", "net", "smartdns"), ignore_errors=True)
-    shutil.copytree(cloned_repos[("https://github.com/pymumu/luci-app-smartdns", "master")],
-                    os.path.join(openwrt.path, "feeds", "luci", "applications", "luci-app-smartdns"), symlinks=True)
-    shutil.copytree(cloned_repos[("https://github.com/pymumu/openwrt-smartdns", "master")],
-                    os.path.join(openwrt.path, "feeds", "packages", "net", "smartdns"), symlinks=True)
-    disable_smartdns_hash_check(os.path.join(openwrt.path, "feeds", "packages", "net", "smartdns", "Makefile"))
 
     # tailscale与luci-app-tailscale-community由拓展软件包提供(跟随上游最新版本), 先移除feed中被固定的同名包以避免重复定义
     logger.info("%s移除feed中被固定的tailscale与luci-app-tailscale-community...", cfg_name)
@@ -269,6 +252,16 @@ def prepare_cfg(config: dict[str, Any],
         shutil.copytree(os.path.join(cloned_repos[(pkg["REPOSITORIE"], pkg["BRANCH"])], pkg["PATH"]), path, symlinks=True)
         if os.path.isdir(os.path.join(path, ".git")):
             shutil.rmtree(os.path.join(path, ".git"))
+
+        # EasyTier的版本号集中写在仓库根的version.mk中, 其两个包的Makefile都以 -include ../version.mk 引用;
+        # 复制到 package/cmzj_packages/<包名>/ 后该文件不再存在, 构建时会静默回退到Makefile内置的版本号(形成两处版本来源),
+        # 因此首次遇到该仓库时补一份到 package/cmzj_packages/version.mk, 使两个包都读到同一份版本定义
+        if pkg["REPOSITORIE"] == "https://github.com/EasyTier/luci-app-easytier":
+            easytier_version_mk = os.path.join(cloned_repos[(pkg["REPOSITORIE"], pkg["BRANCH"])], "version.mk")
+            version_mk_path = os.path.join(openwrt.path, "package", "cmzj_packages", "version.mk")
+            if os.path.isfile(easytier_version_mk) and not os.path.isfile(version_mk_path):
+                shutil.copy2(easytier_version_mk, version_mk_path)
+                logger.info("复制EasyTier版本文件到 %s", version_mk_path)
 
     # 替换golang版本
     golang_path = os.path.join(openwrt.path, "feeds", "packages", "lang", "golang")
@@ -346,46 +339,35 @@ def prepare_cfg(config: dict[str, Any],
     arch, version = openwrt.get_arch()
     match arch:
         case "i386":
-            adg_arch, clash_arch = "386", "linux-386"
+            clash_arch = "linux-386"
         case "i686":
-            adg_arch, clash_arch = "386", None
+            clash_arch = None
         case "x86_64":
-            adg_arch, clash_arch = "amd64", "linux-amd64"
+            clash_arch = "linux-amd64"
         case "mipsel":
-            adg_arch, clash_arch = "mipsel", "linux-mipsle-softfloat"
+            clash_arch = "linux-mipsle-softfloat"
         case "mips64el":
-            adg_arch, clash_arch = "mips64el", None
+            clash_arch = None
         case "mips":
-            adg_arch, clash_arch = "mips", "linux-mips-softfloat"
+            clash_arch = "linux-mips-softfloat"
         case "mips64":
-            adg_arch, clash_arch = "mips64", "linux-mips64"
+            clash_arch = "linux-mips64"
         case "arm":
             if version:
-                adg_arch, clash_arch = f"arm{version}", f"linux-arm{version}"
+                clash_arch = f"linux-arm{version}"
             else:
-                adg_arch, clash_arch = "armv5", "linux-armv5"
+                clash_arch = "linux-armv5"
         case "aarch64":
-            adg_arch, clash_arch = "arm64", "linux-arm64"
+            clash_arch = "linux-arm64"
         case "powerpc":
-            adg_arch, clash_arch = "powerpc", None
+            clash_arch = None
         case "powerpc64":
-            adg_arch, clash_arch = "ppc64", None
+            clash_arch = None
         case _:
-            adg_arch, clash_arch = None, None
+            clash_arch = None
 
     tmpdir = paths.get_tmpdir()
     dl_tasks: list[DLTask] = []
-    if adg_arch and openwrt.get_package_config("luci-app-adguardhome") == "y":
-        logger.info("%s下载架构为%s的AdGuardHome核心", cfg_name, adg_arch)
-        releases = get_gh_repo_last_releases("AdguardTeam/AdGuardHome")
-        if releases:
-            for asset in releases["assets"]:
-                if asset["name"] == f"AdGuardHome_linux_{adg_arch}.tar.gz":
-                    dl_tasks.append(dl2(asset["browser_download_url"], os.path.join(tmpdir.name, "AdGuardHome.tar.gz")))
-                    break
-            else:
-                logger.error("未找到可用的AdGuardHome二进制文件")
-
     if clash_arch and openwrt.get_package_config("luci-app-openclash") == "y":
         logger.info("%s下载架构为%s的OpenClash核心", cfg_name, clash_arch)
         dl_tasks.append(dl2(f"https://raw.githubusercontent.com/vernesong/OpenClash/refs/heads/core/dev/meta/clash-{clash_arch}.tar.gz",
@@ -395,13 +377,6 @@ def prepare_cfg(config: dict[str, Any],
 
     wait_dl_tasks(dl_tasks)
     # 解压
-    if os.path.isfile(os.path.join(tmpdir.name, "AdGuardHome.tar.gz")):
-        with tarfile.open(os.path.join(tmpdir.name, "AdGuardHome.tar.gz"), "r:gz") as tar:
-            if file := tar.extractfile("./AdGuardHome/AdGuardHome"):
-                with open(os.path.join(files_path, "usr", "bin", "AdGuardHome", "AdGuardHome"), "wb") as f:
-                    f.write(file.read())
-                os.chmod(os.path.join(files_path, "usr", "bin", "AdGuardHome", "AdGuardHome"), 0o755)  # noqa: S103
-
     clash_core_path = os.path.join(files_path, "etc", "openclash", "core")
     if not os.path.isdir(clash_core_path):
         os.makedirs(clash_core_path)

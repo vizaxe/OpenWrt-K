@@ -250,7 +250,7 @@ function input_parameters() {
     if [ "$(grep -c "^ipaddr=" $TMPDIR/openwrtext.config)" -eq '1' ];then
         ipaddr=$(grep "^ipaddr=" $TMPDIR/openwrtext.config|sed -e "s/ipaddr=//")
     else
-        ipaddr="192.168.1.1"
+        ipaddr="192.168.2.1"
     fi
     if [ "$(grep -c "^timezone=" $TMPDIR/openwrtext.config)" -eq '1' ];then
         timezone=$(grep "^timezone=" $TMPDIR/openwrtext.config|sed -e "s/timezone=//")
@@ -1122,7 +1122,7 @@ openwrt_extension_config() {
         1)
             # 编辑ip地址
             while true; do
-                NEW_IPADDR=$(whiptail --title "修改IP地址" --inputbox "默认IP：192，168.1.1容易与光猫路由器冲突，这可能导致无法访问openwrt或互联网，你可以在这里修改openwrt默认ip" 10 60 $ipaddr 3>&1 1>&2 2>&3)
+                NEW_IPADDR=$(whiptail --title "修改IP地址" --inputbox "默认IP：192.168.2.1容易与光猫路由器冲突，这可能导致无法访问openwrt或互联网，你可以在这里修改openwrt默认ip" 10 60 $ipaddr 3>&1 1>&2 2>&3)
                 exitstatus=$?
                 if [ $exitstatus != 0 ]; then
                     echo "你选择了退出"
@@ -1237,7 +1237,7 @@ openwrt_extension_config() {
             return 6
             ;;
         7)
-            sed -i "/^ipaddr/s/=.*/=192.168.1.1/g" buildconfig.config
+            sed -i "/^ipaddr/s/=.*/=192.168.2.1/g" buildconfig.config
             sed -i "/^timezone=/s/=.*/=CST-8/g" buildconfig.config
             sed -i "/^zonename=/s#=.*#=Asia/Shanghai#g" buildconfig.config
             sed -i  "/^kmod_compile_exclude_list=/s/=.*/=kmod-shortcut-fe-cm,kmod-shortcut-fe,kmod-fast-classifier/g" buildconfig.config

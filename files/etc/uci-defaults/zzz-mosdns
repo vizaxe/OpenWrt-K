@@ -1,0 +1,31 @@
+#!/bin/sh
+# mosdns（DNS 分流器）首次开机配置
+#
+# 这里只负责「启用并启动」——配置本身由 files/etc/mosdns/config.yaml 预置进固件。
+# 开机后 mosdns 监听 5335，作为 AdGuardHome 的上游：
+#   dnsmasq -> AdGuardHome(1745) -> mosdns(5335) -> 上游 DNS
+#
+# 之所以需要这个文件：mosdns 包的 postinst 会主动执行
+#   /etc/init.d/mosdns stop + disable
+# 也就是说装完默认不启用、不自启，必须在此显式打开。
+
+has_package() {
+  if command -v apk >/dev/null 2>&1; then
+    apk info -e "$1" >/dev/null 2>&1
+  else
+    opkg list-installed 2>/dev/null | grep -Eq "^$1( - |$)"
+  fi
+}
+
+# 等待包数据库就绪（与其它 uci-defaults 脚本一致的做法）
+until has_package kernel; do
+  sleep 1
+done
+
+# 配置文件缺失时不启动，避免服务反复重启刷日志
+if has_package mosdns && [ -f /etc/mosdns/config.yaml ];then
+  /etc/init.d/mosdns enable
+  /etc/init.d/mosdns restart
+fi
+
+exit 0

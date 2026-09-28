@@ -1,0 +1,76 @@
+#!/bin/sh /etc/rc.common
+# 本地覆盖版 xray 服务脚本（上游 openwrt/packages 的同名文件会被本文件覆盖）
+#
+# 与官方版本的差异只有两点：
+#   1. 启动前兜底创建运行身份（uid=0 / gid=966），见 /etc/uci-defaults/zzz-xray-user 的说明；
+#   2. 以 xray 用户/组运行 —— procd 会先 setgid(966) 再 setuid(0)，
+#      于是进程的 skgid=966，/etc/nftables.d/xray.nft 里的 "meta skgid 966" 才能命中。
+
+USE_PROCD=1
+START=99
+
+CONF="xray"
+PROG="/usr/bin/xray"
+RUN_USER="xray"
+RUN_GROUP="xray"
+
+ensure_runtime_user() {
+	grep -q "^${RUN_GROUP}:" /etc/group  || echo "${RUN_GROUP}:x:966:" >> /etc/group
+	grep -q "^${RUN_USER}:" /etc/passwd || echo "${RUN_USER}:x:0:966:${RUN_USER}:/var/run/xray:/bin/false" >> /etc/passwd
+}
+
+start_service() {
+	ensure_runtime_user
+
+	config_load "$CONF"
+
+	local enabled
+	config_get_bool enabled "enabled" "enabled" "0"
+	[ "$enabled" -eq "1" ] || return 1
+
+	local confdir
+	local conffiles
+	local datadir
+	local dialer
+	local format
+
+	config_get confdir "config" "confdir"
+	config_get conffiles "config" "conffiles"
+	config_get datadir "config" "datadir" "/usr/share/xray"
+	config_get dialer "config" "dialer"
+	config_get format "config" "format" "json"
+
+	procd_open_instance "$CONF"
+	procd_set_param command "$PROG" run
+	[ -n "$confdir" ] && procd_append_param command -confdir "$confdir"
+	[ -n "$conffiles" ] && {
+		for i in $conffiles
+		do
+			procd_append_param command -config "$i"
+		done
+	}
+	[ -n "$format" ] && procd_append_param command -format "$format"
+	[ -n "$dialer" ] && procd_set_param env XRAY_BROWSER_DIALER="$dialer"
+	procd_set_param env XRAY_LOCATION_ASSET="$datadir"
+	procd_set_param file $conffiles
+
+	procd_set_param user "$RUN_USER"
+	procd_set_param group "$RUN_GROUP"
+
+	procd_set_param limits core="unlimited"
+	procd_set_param limits nofile="1000000 1000000"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_set_param respawn
+
+	procd_close_instance
+}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger "$CONF"
+}

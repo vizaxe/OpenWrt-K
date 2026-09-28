@@ -1,0 +1,36 @@
+#!/bin/sh
+
+ip rule delete fwmark 0x11 table 100
+ip route delete local 0.0.0.0/0 dev lo table 100
+ip -6 rule delete fwmark 0x11 table 106
+ip -6 route delete local ::/0 dev lo table 106
+
+echo 'test network'
+while true
+do
+  ping -c 1 223.5.5.5 > /dev/null
+  if [ $? -eq 0  ];then
+    echo " ping ok"
+    break
+  else
+    echo " ping fail "
+    sleep 1
+  fi
+done
+
+echo 'check xray process'
+while true
+do
+  if ps | grep "xray" | grep -v grep > /dev/null; then
+    echo "xray process exist"
+    break
+  else
+    echo "xray process no exist"
+    sleep 1
+  fi
+done
+
+ip rule add fwmark 0x11 table 100
+ip route add local 0.0.0.0/0 dev lo table 100
+ip -6 rule add fwmark 0x11 table 106
+ip -6 route add local ::/0 dev lo table 106

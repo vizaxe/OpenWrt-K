@@ -1,0 +1,13 @@
+# xray 服务配置（本地预置，覆盖包的默认文件；默认 enabled=0，这里改为开机自启）
+# 说明：只给 confdir，不加 conffiles —— 放在 /etc/xray/ 下的任意 *.json 都会被加载，
+#       也不会因为缺少某个具体配置文件而启动失败。
+# 需要自备配置：/etc/xray/config.json（入站用 dokodemo-door + sockopt.tproxy，出站按需）
+
+config xray 'enabled'
+	option enabled '1'
+
+config xray 'config'
+	option confdir '/etc/xray'
+	option datadir '/usr/share/xray'
+	option dialer ''
+	option format 'json'

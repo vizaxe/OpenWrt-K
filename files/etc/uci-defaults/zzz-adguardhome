@@ -1,0 +1,43 @@
+#!/bin/sh
+# AdGuardHome（官方 openwrt 方案）首次开机配置
+#
+# 本文件由 zzz-chenmozhijin 拆分而来，便于独立维护：
+# 不再使用 AdGuardHome 时，直接删除本文件即可，无需改动 zzz-chenmozhijin。
+#
+# 与第三方版(chenmozhijin/luci-app-adguardhome)的区别：官方版没有 redirect 功能
+# （不会自动把 dnsmasq 上游指向 AdGuardHome），因此这里显式配置 dnsmasq 上游，
+# 保持原有链路：dnsmasq -> AdGuardHome(1745) -> mosdns(5335)
+
+has_package() {
+  if command -v apk >/dev/null 2>&1; then
+    apk info -e "$1" >/dev/null 2>&1
+  else
+    opkg list-installed 2>/dev/null | grep -Eq "^$1( - |$)"
+  fi
+}
+
+# 等待包数据库就绪（与 zzz-chenmozhijin 同样的做法）
+until has_package kernel; do
+  sleep 1
+done
+
+if has_package adguardhome;then
+uci batch << EOI
+set adguardhome.config.config_file='/etc/adguardhome/adguardhome.yaml'
+set adguardhome.config.work_dir='/etc/adguardhome'
+set adguardhome.config.user='adguardhome'
+set adguardhome.config.group='adguardhome'
+set adguardhome.config.verbose='0'
+EOI
+  uci commit adguardhome
+  /etc/init.d/adguardhome enable
+  /etc/init.d/adguardhome restart
+  # 显式补上 dnsmasq 上游，维持 dnsmasq -> AdGuardHome(1745) -> mosdns(5335)
+  uci -q delete dhcp.@dnsmasq[0].server
+  uci add_list dhcp.@dnsmasq[0].server='127.0.0.1#1745'
+  uci set dhcp.@dnsmasq[0].noresolv='1'
+  uci commit dhcp
+  /etc/init.d/dnsmasq restart
+fi
+
+exit 0

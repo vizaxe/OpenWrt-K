@@ -1,0 +1,179 @@
+{
+  "log": {
+    "loglevel": "debug",
+    "dnsLog": true
+  },
+  "dns": {
+    "tag": "dns",
+    "disableCache": true,
+    "disableFallback": true,
+    "disableFallbackIfMatch": true,
+    // "queryStrategy": "UseIPv4",
+    "hosts": {
+      "dns.google": "8.8.8.8"
+    },
+    "servers": ["127.0.0.1"]
+  },
+  "inbounds": [
+    {
+      "tag": "transparent",
+      "listen": "0.0.0.0",
+      "port": 65535,
+      "protocol": "dokodemo-door",
+      "settings": {
+        "network": "tcp,udp",
+        "followRedirect": true
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      },
+      "streamSettings": {
+        "sockopt": {
+          "tproxy": "tproxy",
+          "mark": 255
+        }
+      }
+    },
+    {
+      "listen": "0.0.0.0",
+      "port": 1080,
+      "protocol": "socks",
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls", "quic"]
+      },
+      "settings": {
+        "auth": "noauth",
+        "udp": true
+      }
+    },
+    {
+      "listen": "0.0.0.0",
+      "port": 1081,
+      "protocol": "http",
+      "settings": {
+        "allowTransparent": false,
+        "userLevel": 0
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr"
+        }
+      }
+    },
+    {
+      "tag": "direct",
+      "protocol": "freedom",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr"
+        }
+      }
+    },
+    {
+      "tag": "blackhole",
+      "protocol": "blackhole",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr"
+        }
+      }
+    },
+    {
+      "tag": "dns-out",
+      "protocol": "dns",
+      "streamSettings": {
+        "sockopt": {
+          "mark": 255,
+          "tcpFastOpen": true,
+          "tcpcongestion": "bbr"
+        }
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "domainMatcher": "hybrid",
+    "rules": [
+      {
+        "type": "field",
+        "outboundTag": "blackhole",
+        "domains": ["geosite:category-ads-all"]
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "protocol": ["bittorrent"],
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "protocol": ["dns"],
+        "outboundTag": "dns-out"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "port": 53,
+        "outboundTag": "dns-out"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "port": 123,
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "direct",
+        "domains": [
+          "domain:justhost.ru",
+          "domain:calheal.com",
+          "domain:kanokano.cn",
+          "domain:oxidns.org"
+        ]
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "proxy",
+        "domains": ["geosite:gfw", "geosite:github", "geosite:google"]
+      },
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "proxy",
+        "ip": [
+          // "geoip:cloudflare",
+          "geoip:facebook",
+          "geoip:google",
+          "geoip:netflix",
+          "geoip:telegram",
+          "geoip:twitter",
+          "8.8.8.8",
+          "8.8.4.4"
+        ]
+      },
+      {
+        "type": "field",
+        "outboundTag": "direct",
+        "network": "tcp,udp"
+      }
+    ]
+  }
+}

@@ -1,0 +1,339 @@
+log:
+  level: debug
+
+plugins:
+  - tag: "hosts"
+    type: "hosts"
+    args:
+      entries:
+        - "dns.google 8.8.8.8 8.8.4.4"
+
+  - tag: "memory_cache"
+    type: "cache"
+    args:
+      size: 1000000
+      lazy_cache_ttl: -1
+      edns_key: false
+
+  # 双栈 ECS：按“查询类型”分派，A 查询写 IPv4 ECS、AAAA 查询写 IPv6 ECS
+  #
+  # 官方 mosdns(v5) 已不再支持 dual-stack 写法：ecs_handler 的 preset 只接受单个 IP，
+  # 且它是按 preset 地址的族别（而非查询类型）决定 ECS family，见其源码
+  # plugin/executable/ecs_handler/handler.go 中 QuickSetupOldECS 的告警
+  # （"Dual-stack ecs is deprecated. Only the first ip will be used"）。
+  # 因此这里拆成两个 ecs_handler，再用 sequence 依 qtype 分派，语义与原自定义插件一致。
+  - tag: "ecs_cn_v4"
+    type: "ecs_handler"
+    args:
+      preset: "36.248.92.196"
+      mask4: 24
+
+  - tag: "ecs_cn_v6"
+    type: "ecs_handler"
+    args:
+      preset: "2408:8248:e00:1890::1"
+      mask6: 48
+
+  - tag: "dual_stack_cn_ecs"
+    type: "sequence"
+    args:
+      - matches: qtype 1 # A 记录 -> IPv4 ECS
+        exec: $ecs_cn_v4
+      - matches: qtype 28 # AAAA 记录 -> IPv6 ECS
+        exec: $ecs_cn_v6
+
+  - tag: "ecs_vps_v4"
+    type: "ecs_handler"
+    args:
+      preset: "194.135.104.1"
+      mask4: 24
+
+  - tag: "ecs_vps_v6"
+    type: "ecs_handler"
+    args:
+      preset: "2605:e440::1"
+      mask6: 48
+
+  - tag: "dual_stack_vps_ecs"
+    type: "sequence"
+    args:
+      - matches: qtype 1 # A 记录 -> IPv4 ECS
+        exec: $ecs_vps_v4
+      - matches: qtype 28 # AAAA 记录 -> IPv6 ECS
+        exec: $ecs_vps_v6
+
+  - tag: block_site
+    type: "domain_set"
+    args:
+      files:
+        - "/etc/mosdns/domain_set/geosite_category-ads-all.txt"
+      domains:
+        - "full:wpad.lan"
+        - "domain:bsccdn.net"
+        - "domain:pkoplink.com"
+        - "domain:saxysec.com"
+        - "domain:uhabo.com"
+        - "domain:xycdn.com"
+        - "domain:kuiniuca.com"
+        - "domain:onethingpcs.com"
+        - "domain:jomodns.cn"
+        - "domain:stun.hitv.com"
+        - "domain:pcdn.xmcdn.com"
+        - "domain:pcdn.yximgs.com"
+
+        # > 腾讯系 (腾讯视频/微信)
+        # - "regexp:.*cdn.*\\.qq\\.net"
+        # - "domain:cdn.qq.net"
+        # - "regexp:.*p2p.*\\.qq\\.net"
+        # - "domain:p2p.qq.net"
+        # - "domain:p2p.video.qq.net"
+        # - "domain:cdn.dnsv1.com"
+        # - "domain:dkey.dnsv1.com"
+
+        # > 爱奇艺（精准拦截 P2P 域名）
+        - "domain:cache.video.iqiyi.com"
+        - "domain:ag.iqiyi.com"
+        - "domain:tpa-hcdn.iqiyi.com"
+
+        ## --- 字节跳动 (抖音/头条) PCDN ---
+        # DOMAIN-KEYWORD,-v-tos
+        # DOMAIN-KEYWORD,volc-video
+        # DOMAIN-KEYWORD,p2p-mcdn
+        - "domain:xinqiucc.com"
+        - "domain:onethingpcs.com"
+        - "domain:xycdn.com"
+        - "domain:kuiniuca.com"
+        - "domain:cibntv.net"
+        - "domain:ykimg.com"
+
+        # --- Bilibili PCDN & MCDN 拦截 ---
+        - "domain:gjfzpt.cn"
+        - "domain:szbdyd.com"
+        - "domain:p2p.bilivideo.com"
+        # - "regexp:.*pcdn.*\\.biliapi\\.net"
+        - "domain:pcdn.biliapi.net"
+        - "domain:mcdn.bilivideo.cn"
+
+        # > 直播类 (斗鱼/虎牙)
+        - "domain:hcdn.huya.com"
+        - "domain:p2p.huya.com"
+        # - "regexp:.*cdn.*\\.douyucdn\\.net"
+        - "domain:douyucdn.net"
+        - "domain:stun1.douyucdn.cn"
+        - "domain:stun.douyucdn.cn"
+
+        # > 迅雷/网心云/下载类 (PCDN 毒瘤，建议全杀)
+        - "domain:onethingpcs.com"
+        - "domain:xycdn.com"
+        - "domain:sandai.net"
+        - "domain:n0808.com"
+
+        # 额外
+        - "domain:appdl-1-drcn.dbankcdn.com"
+        - "domain:biligame.com"
+        - "domain:krxd.net"
+        - "domain:biligame.net"
+        - "domain:dl.hdslb.com"
+        - "domain:cm.bilibili.com"
+        - "domain:bugly.qq.com"
+        - "domain:app-analytics-services.com"
+        - "domain:ulogs.umeng.com"
+        # - "domain:upos-sz-staticcos.bilivideo.com"
+
+  - tag: proxy_site
+    type: "domain_set"
+    args:
+      files:
+        - "/etc/mosdns/domain_set/geosite_gfw.txt"
+        - "/etc/mosdns/domain_set/geosite_github.txt"
+        - "/etc/mosdns/domain_set/geosite_google.txt"
+      domains:
+        - "domain:docker.com"
+        - "domain:docker.io"
+        - "domain:ghcr.io"
+        - "domain:gstatic.com"
+        - "d36jcksde1wxzq.cloudfront.net"
+        - "domain:nixos.org"
+        - "domain:xanasoft.com"
+        - "domain:jetbrains.com"
+        - "domain:gitbook.io"
+        - "domain:gitbook.com"
+        - "domain:githubassets.com"
+        - "domain:alpinelinux.org"
+
+  - tag: direct_site
+    type: "domain_set"
+    args:
+      exps:
+        - "domain:daocloud.io"
+        - "steampipe.steamcontent.tnkjmec.com"
+        - "st.dl.eccdnx.com"
+        - "st.dl.bscstorage.net"
+        - "st.dl.pinyuncloud.com"
+        - "dl.steam.clngaa.com"
+        - "cdn.mileweb.cs.steampowered.com.8686c.com"
+        - "cdn-ws.content.steamchina.com"
+        - "cdn-qc.content.steamchina.com"
+        - "cdn-ali.content.steamchina.com"
+        - "xz.pphimalayanrt.com"
+        - "lv.queniujq.cn"
+        - "alibaba.cdn.steampipe.steamcontent.com"
+        - "domain:calheal.com"
+        - "domain:kanokano.cn"
+        - "domain:oxidns.org"
+
+  - tag: easytier_site
+    type: "domain_set"
+    args:
+      exps:
+        - "domain:et.net"
+
+  - tag: dhcp_site
+    type: "domain_set"
+    args:
+      exps:
+        - "domain:lan"
+
+  - tag: "forward_google"
+    type: "forward"
+    args:
+      upstreams:
+        - addr: "tls://dns.google"
+          dial_addr: "8.8.8.8"
+          enable_pipeline: true
+        - addr: "tls://dns.google"
+          dial_addr: "8.8.4.4"
+          enable_pipeline: true
+
+  - tag: "forward_cloudflare"
+    type: "forward"
+    args:
+      upstreams:
+        - addr: "tls://1.1.1.1"
+          enable_pipeline: true
+        - addr: "tls://1.0.0.1"
+          enable_pipeline: true
+
+  - tag: "forward_dhcp"
+    type: "forward"
+    args:
+      upstreams:
+        - addr: "192.168.2.1"
+
+  - tag: "forward_easytier"
+    type: "forward"
+    args:
+      upstreams:
+        - addr: "100.100.100.101"
+          dial_addr: "100.100.100.101"
+
+  - tag: "direct_sq"
+    type: "sequence"
+    args:
+      - exec: $dual_stack_cn_ecs
+      - exec: $forward_google
+      - matches: has_resp
+        exec: accept
+
+  - tag: "proxy_sq"
+    type: "sequence"
+    args:
+      - exec: $dual_stack_vps_ecs
+      - exec: $forward_google
+      - matches: has_resp
+        exec: accept
+
+  - tag: "ext_proxy_sq"
+    type: "sequence"
+    args:
+      - exec: $dual_stack_vps_ecs
+      - exec: $forward_google
+      - matches: has_resp
+        exec: accept
+
+  - tag: "cloudflare_sq"
+    type: "sequence"
+    args:
+      - exec: $forward_cloudflare
+      - matches: has_resp
+        exec: accept
+
+  - tag: "easytier_sq"
+    type: "sequence"
+    args:
+      - exec: $forward_easytier
+      - matches: has_resp
+        exec: accept
+      - exec: reject 0
+
+  - tag: "dhcp_sq"
+    type: "sequence"
+    args:
+      - exec: $forward_dhcp
+      - matches: has_resp
+        exec: accept
+      - exec: reject 0
+
+  - tag: "mimt_black_hole_sq"
+    type: "sequence"
+    args:
+      - exec: black_hole 192.168.2.1 fd9b:ba94:3ef9::1
+      - exec: accept
+
+  # 主运行序列
+  - tag: "main_sequence"
+    type: "sequence"
+    args:
+      - exec: $hosts
+      - matches: has_resp
+        exec: accept
+
+      - matches: qname $dhcp_site
+        exec: jump dhcp_sq
+
+      - matches: qname $easytier_site
+        exec: jump easytier_sq
+
+      - matches: qtype 12
+        exec: reject 0
+
+      - matches: qname $block_site
+        exec: reject 0
+
+      - exec: $memory_cache
+      - matches: has_resp
+        exec: accept
+
+      - matches: qname $direct_site
+        exec: jump direct_sq
+
+      - matches: qname $proxy_site
+        exec: jump proxy_sq
+
+      - exec: $dual_stack_cn_ecs
+      - exec: $forward_google
+      - matches: has_resp
+        exec: accept
+
+  # 启动监听服务
+  - tag: "udp_server_5335"
+    type: "udp_server"
+    args:
+      entry: "main_sequence"
+      listen: ":5335"
+
+  - tag: "tcp_server_5335"
+    type: "tcp_server"
+    args:
+      entry: "main_sequence"
+      listen: ":5335"
+
+  - tag: "http_server"
+    type: "http_server"
+    args:
+      entries:
+        - path: /mosdns-query
+          exec: "main_sequence"
+      # src_ip_header: "X-Real-IP"
+      listen: ":8443"
+      idle_timeout: 300

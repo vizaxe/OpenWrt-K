@@ -1,0 +1,18 @@
+#!/bin/sh
+# 创建 xray 的运行身份：uid=0（root）、gid=966
+#
+# 为什么需要它：
+#   /etc/nftables.d/xray.nft 的 xray_output 链里有一条 "meta skgid 966 counter accept"，
+#   用来放过 xray 自己发出的连接（避免被自己的 tproxy 规则二次抓取、形成死循环）。
+#   只有让 xray 以组 966 运行，这条规则才会命中。
+#
+# 幂等：已存在则跳过。
+# 持久：/etc/passwd 与 /etc/group 属于 base-files 的 sysupgrade 保留文件，生成一次即可长期有效。
+
+XRAY_UID=0
+XRAY_GID=966
+
+grep -q "^xray:" /etc/group  || echo "xray:x:${XRAY_GID}:" >> /etc/group
+grep -q "^xray:" /etc/passwd || echo "xray:x:${XRAY_UID}:${XRAY_GID}:xray:/var/run/xray:/bin/false" >> /etc/passwd
+
+exit 0
