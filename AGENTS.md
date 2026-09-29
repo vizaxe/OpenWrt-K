@@ -141,16 +141,23 @@
 | --- | --- | --- |
 | 内核能力 | `kmod-nft-tproxy`（`tproxy` 表达式）、`kmod-nft-socket`（`socket transparent`）；`kmod-nf-tproxy` / `kmod-nf-socket` / `kmod-nf-conntrack` 由依赖自动拉齐 | `config/<目标>/kmod.config` |
 | 代理核心 | 官方 feed 的 `xray-core`（自带 `/etc/init.d/xray` 与 `/etc/config/xray`，版本与 passwall-packages 同为 26.9.9 一系） | `config/<目标>/network.config` |
-| nft 规则 | `files/etc/nftables.d/xray.nft`，由 `firewall4` 自动 include 进 `table inet fw4`；`cn_ipv4` / `cn_ipv6` set 由同目录的 `.conf` 提供 | `files/` |
-| 运行身份 | `xray` 用户/组 = uid 0、gid 966；由 `zzz-xray-user`（开机创建）与覆盖版 `init.d/xray`（`procd_set_param user/group`）共同保证 | `files/` |
+| nft 规则 | `files/etc/nftables.d/xray.nft`，由 `firewall4` 自动 include 进 `table inet fw4`；`cn_ipv4` / `cn_ipv6` set 由同目录的 `.conf` 提供。共三条链：`xray_divert`（`mangle -10`，经典 DIVERT 语义，只匹配 TCP、先让过 `mark 0xff`）→ `xray_prerouting`（`mangle`，`tproxy` + 直连放行，mark 写在 `tproxy` 之后）→ `xray_output`（`filter -10`，首条放行 xray 自身出站） | `files/` |
+| xray 主配置 | `files/etc/xray/config.json`：dokodemo-door tproxy 入站 **65535**（与 nft 里的 `tproxy … to :65535` 强耦合）、各出站 `sockopt.mark=255`、`loglevel=warning` | `files/` |
+| 运行身份 | `xray` 用户/组 = uid 0、gid 966；由 `zzz-xray-user`（开机创建）与覆盖版 `init.d/xray`（`procd_set_param user/group`）共同保证。⚠️ `/etc/init.d/xray` **不在** xray-core 的 conffiles（该包只声明 `/etc/xray/` 与 `/etc/config/xray`），运行时升级 / 重装会被官方 init 覆盖，而官方 init 完全没有 `user/group` | `files/` |
 | 启停 | `start-tproxy` / `stop-tproxy` 配置 `fwmark 0x11` 与本地路由表 100（v4）/106（v6） | `files/usr/bin/` |
 
-**改动这块时必须同时想到的四件事**：
+**改动这块时必须同时想到的六件事**：
 
 1. 规则里只要出现 `tproxy`，就必须有 `kmod-nft-tproxy`；出现 `socket transparent`，就必须有 `kmod-nft-socket`。**这两个不能跟随"代理清理"一起删掉**；
-2. `meta skgid 966` 要生效，xray 必须以 gid 966 运行 —— 光建用户不够，还得让 init 用 `procd_set_param group` 切过去；
-3. 启停脚本依赖 `ip-full`（BusyBox 的 `ip` 做不了带 table 的 rule/route）；
-4. 这条链路**不需要 iptables**：`iptables-nft` 与 `iptables-mod-ipopt` 已在排除清单里，防火墙完全走 `firewall4` + nftables 原生语法。`kmod-nft-compat` 作为内核兼容层保留（体积小，且允许在 nft 规则里使用 xtables 风格匹配）。
+2. **标记的顺序**：`meta mark set 0x11` 必须写在 `tproxy` **之后**。内核 `nft_tproxy_eval` 找不到透明套接字时置 `NFT_BREAK` —— 本规则后续语句（含 `counter` / `accept`）全部跳过，但**已写入的 mark 不会回滚**。写在前面，失败包就会带着 `fwmark 0x11` 进 `table 100`（`local default dev lo`）却无人接收，表现为"部分流量静默黑洞"。官方 TProxy 教程写 `tproxy … meta mark set 1` 也是这个道理；
+3. **让路必须三处齐全**：xray 自身出站靠 `SO_MARK 255` 兜底，即 `files/etc/xray/config.json` 每个出站都要有 `"mark": 255`，且 `xray_prerouting`、`xray_output` **两条链的首条规则**都得是 `meta mark 0xff counter accept`，`xray_divert` 里也要先让过 0xff。少一处，255 就会被链尾的 `mark set 0x11` 改写，xray 出站经 `lo` 回到 prerouting 被当成新连接抓回自己 —— **无限自环，xray 内存可涨到 GB 级**（真实故障：`meta skgid 966` 失配 + `xray_output` 缺 0xff 让路，见 UC-0018）；
+4. `meta skgid 966` 要生效，xray 必须以 gid 966 运行 —— 光建用户不够，还得让 init 用 `procd_set_param group` 切过去。内核里 `meta skgid` 取的是套接字 `file->f_cred->fsgid`，而 `setgid()` 会同步 fsgid，所以 `procd` 的 `setgid(966)` 本身够用；**危险的是它悄悄失效**（上表那条 init 被覆盖），此时规则不报错、只是永不命中；
+5. 启停脚本依赖 `ip-full`（BusyBox 的 `ip` 做不了带 table 的 rule/route）；
+6. 这条链路**不需要 iptables**：`iptables-nft` 与 `iptables-mod-ipopt` 已在排除清单里，防火墙完全走 `firewall4` + nftables 原生语法。`kmod-nft-compat` 作为内核兼容层保留（体积小，且允许在 nft 规则里使用 xtables 风格匹配）。
+
+**IPv6 不要"顺手改成 `listen: "::"`"**：`listen: "0.0.0.0"` 在 Go 里是通配地址，`favoriteAddrFamily()` 会把它建成 **AF_INET6 双栈**套接字（绑 `::`、`IPV6_V6ONLY=0`），v4 与 v6 的透明套接字查找都能命中它；改成 `"::"` 反而会变成 v6-only 并打断 v4 的 tproxy。因此本方案只需一个入站，`tproxy ip6` 与 `table 106` 保持启用。
+
+**分流数据（geodata）**：`/usr/share/xray/geoip.dat` 与 `geosite.dat` 由 `prepare.py` 在构建期从 `Loyalsoldier/v2ray-rules-dat` 的 `releases/latest/download` 下载（跟随最新 tag，`config.json` 无需任何改写，见第 4.2 节与 UC-0019）。⚠️ **不要改用官方 feed 的 `v2ray-geodata`**：它装的是 v2fly 数据（实测其 geoip 只有国家代码 + `PRIVATE`/`TEST`/`ZZ`，geosite 也没有 `gfw` 类别），换上后 `config.json` 里的 `geosite:gfw` 与 `geoip:facebook` / `google` / `netflix` / `telegram` / `twitter` 会全部落空；`v2ray-geoip` / `v2ray-geosite` 也仍然被 `local.config` 排除，两条路会争同一个 `/usr/share/xray/` 路径。
 
 ---
 
@@ -227,12 +234,13 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `files/etc/nftables.d/xray.nft` | 本地透明代理 nft 片段：用 `tproxy` 把选中流量交给 xray，并用 `meta skgid 966` 放过 xray 自身的出站连接。`firewall4` 会自动 include `/etc/nftables.d/*.nft` |
+| `files/etc/nftables.d/xray.nft` | 本地透明代理 nft 片段，三条链：`xray_divert`（经典 DIVERT 语义，**只匹配 TCP**，且先让过 `mark 0xff`）、`xray_prerouting`（`tproxy … to :65535 meta mark set 0x11`，**mark 写在 `tproxy` 之后**）、`xray_output`（首条 `meta mark 0xff counter accept` 放行 xray 出站，`meta skgid 966` 仅作兜底）。`firewall4` 会自动 include `/etc/nftables.d/*.nft`。**不含** `myip` / `vps` 空集合（原先那几条直连规则永不命中，已删，见 UC-0018） |
 | `files/etc/nftables.d/cn_ipv4.conf`、`cn_ipv6.conf` | 上面规则 `include` 的国内地址集（`cn_ipv4` / `cn_ipv6` 两个 set），直连判定用 |
-| `files/usr/bin/start-tproxy`、`stop-tproxy` | 手动启停全局透明代理：配置 `fwmark 0x11` + `table 100/106` 的本地路由（依赖 `ip-full`） |
-| `files/etc/init.d/xray` | **覆盖**官方 init：启动前兜底创建运行身份，并以 `xray` 用户/组（gid 966）运行 |
+| `files/usr/bin/start-tproxy`、`stop-tproxy` | 手动启停全局透明代理：配置 `fwmark 0x11` + `table 100/106` 的本地路由（依赖 `ip-full`）。⚠️ 排障时先跑 `stop-tproxy` 再停 xray：只停 xray 而留着路由表，会让所有非直连流量按"未命中透明套接字"静默黑洞 |
+| `files/etc/init.d/xray` | **覆盖**官方 init：启动前兜底创建运行身份，并以 `xray` 用户/组（gid 966）运行。该路径不在包的 conffiles 里，运行时升级 / 重装 `xray-core` 会被官方版覆盖（官方版无 `user/group`），届时 `skgid 966` 静默失效 |
 | `files/etc/uci-defaults/zzz-xray-user` | 首次开机创建 `xray` 用户/组（uid 0 / gid 966），与 nft 规则里的 `skgid 966` 对应 |
-| `files/etc/config/xray` | 预置 xray 的 uci 配置：`enabled=1` + `confdir=/etc/xray`（配置文件需自备 `config.json`） |
+| `files/etc/xray/config.json` | 预置 xray 主配置：dokodemo-door tproxy 入站 **65535**（与 nft 的 `tproxy … to :65535` 强耦合）、各出站 `sockopt.mark=255`（防自环主保护）、`loglevel=warning`。落入 `/etc/xray/`（xray-core 的 conffiles，sysupgrade 保留设备上改过的版本） |
+| `files/etc/config/xray` | 预置 xray 的 uci 配置：`enabled=1` + `confdir=/etc/xray`；主配置由上面的 `config.json` 预置，出站节点需自行填写 |
 | `files/etc/nginx/nginx.conf` | nginx **自管配置**（uci_enable=false 时接管）：加载 `module.d/*.module`、`http` 段 include `conf.d/*.conf`、顶层 `stream` 段 include `stream.d/*.conf`；**不监听 80/443**，仅用于自定义端口反代 |
 | `files/etc/adguardhome/adguardhome.yaml` | AdGuardHome 主配置（官方方案的 `config_file`）。内容已按本地环境调整（见 UC-0010），包方案见 UC-0011 |
 | `files/etc/adguardhome/data/filters/` | AdGuardHome 工作目录（官方 `work_dir`，本地设为 `/etc/adguardhome`）下的订阅缓存，编译期由 `prepare.py` 下载刷新；二进制由官方 `adguardhome` 包编译提供，装到 `/usr/bin/AdGuardHome` |
@@ -245,6 +253,7 @@
 | `files/etc/uci-defaults/zzz-mosdns` | 启用并启动 mosdns（mosdns 包的 postinst 会 stop + disable，必须显式 enable）；配置缺失时不启动 |
 | `files/etc/uci-defaults/zzz-nginx` | 关闭 nginx 的 uci 管理（`nginx.global.uci_enable=false`）使自管 `nginx.conf` 接管，并清理可能残留的 uci.conf、启用服务 |
 | `files/usr/share/cmzj/openwrt-k_tool.sh` | 让固件支持 `openwrt-k` 命令升级非官方源软件包 |
+| `files/usr/share/xray/geoip.dat`、`geosite.dat` | 由 `prepare.py` **构建期下载生成**（不纳入版本控制）：取自 `Loyalsoldier/v2ray-rules-dat` 的 `releases/latest/download`，固件内固定路径 `/usr/share/xray/`（与 `/etc/config/xray` 的 `datadir`、覆盖版 init 的 `XRAY_LOCATION_ASSET` 一致，xray 只认这两个文件名）。⚠️ **必须用 Loyalsoldier 数据集**：它提供 `geosite:gfw` 与 `geoip:facebook` / `google` / `netflix` / `telegram` / `twitter` 等组织标签；官方 feed 的 `v2ray-geodata` 是 v2fly 数据、上述类别缺失（见 UC-0019）。约 26.3 MiB（15.86 + 10.46） |
 
 ### 4.3 补丁
 
@@ -469,6 +478,8 @@ shutil.rmtree(os.path.join(openwrt.path, "feeds", "luci", "applications", "<包�
 | `prepare.py` / `build.py` / `utils/*.py` | `cd build_helper && ruff check .`（line-length 159，`select = ["ALL"]`） |
 | `files/etc/uci-defaults/*` | `sh -n files/etc/uci-defaults/<文件>` 语法检查 |
 | `files/etc/**/*.yaml` | `python3 -c "import yaml;yaml.safe_load(open('files/etc/adguardhome/adguardhome.yaml'))"` |
+| `files/etc/nftables.d/*.nft` | 该文件是 `table inet fw4` 的**片段**，需包一层再校验：`{ echo 'table inet fw4 {'; cat <文件>; echo '}'; } \| nft -c -f -`（含 `include` 时先把路径指向实际 `.conf`）。⚠️ 受限环境里 `nft -c` 会因 `cache initialization failed: Operation not permitted` 失败，改用 `unshare -rn nft -c -f <包装后的文件>`，在独立 netns 内可完成真实校验 |
+| `files/etc/xray/config.json` | **不能用标准 JSON 解析器**（xray 允许 `//` 注释与尾逗号）；用 xray 自身校验（`xray run -test …`，具体参数以 `xray help run` 为准） |
 | `patches/*.patch` | 在 OpenWrt 源码树中 `git apply --check <补丁>` |
 | 全量 | 推送触发 CI，或在 GitHub 上手动 `workflow_dispatch` |
 

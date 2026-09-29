@@ -1,7 +1,11 @@
 # xray 服务配置（本地预置，覆盖包的默认文件；默认 enabled=0，这里改为开机自启）
 # 说明：只给 confdir，不加 conffiles —— 放在 /etc/xray/ 下的任意 *.json 都会被加载，
 #       也不会因为缺少某个具体配置文件而启动失败。
-# 需要自备配置：/etc/xray/config.json（入站用 dokodemo-door + sockopt.tproxy，出站按需）
+# 配置由固件预置：files/etc/xray/config.json（构建期落到 /etc/xray/config.json）。
+#   - 入站用 dokodemo-door + sockopt.tproxy，端口 65535，与 /etc/nftables.d/xray.nft 里
+#     "tproxy ip to :65535" 强耦合，改端口必须两边一起改（否则包会被送进 table 100 却无人接收）；
+#   - 出站须自行填真实节点，且每个出站都要保留 sockopt.mark=255（这是防止自环的主保护）；
+#   - /etc/xray/ 是 xray-core 包的 conffiles 目录，sysupgrade 会保留你在设备上改过的版本。
 
 config xray 'enabled'
 	option enabled '1'

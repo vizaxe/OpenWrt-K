@@ -1,7 +1,9 @@
 {
   "log": {
-    "loglevel": "debug",
-    "dnsLog": true
+    // debug 级别 + dnsLog 会让每条连接、每次 DNS 都写日志；procd 通过管道转发给 logd，
+    // 一旦发生连接自环就会变成日志放大器，把 CPU 与内存一起拖垮。生产环境保持 warning。
+    "loglevel": "warning",
+    "dnsLog": false
   },
   "dns": {
     "tag": "dns",

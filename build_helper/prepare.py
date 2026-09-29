@@ -205,6 +205,20 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
     dl_tasks.append(dl2("https://raw.githubusercontent.com/chenmozhijin/AdGuardHome-Rules/main/AdGuardHome-dnslist(by%20cmzj).yaml",
                      os.path.join(global_files_path, "etc", "AdGuardHome-dnslist(by cmzj).yaml")))
 
+    # 下载xray分流数据(geodata): 采用Loyalsoldier的数据集。
+    # 注意不能改用官方feed的v2ray-geodata(数据源为v2fly): 其实测geoip只有国家代码(没有facebook/google/
+    # netflix/telegram等组织标签)、geosite没有gfw类别, 而files/etc/xray/config.json正好用到这些标签,
+    # 换成v2fly数据后那些规则会整体落空。Loyalsoldier版同时提供geosite:category-ads-all/gfw/github/google
+    # 与上述geoip组织标签, 故本仓库的config.json无需任何改写。
+    # 目标目录与xray侧的约定一致: /etc/config/xray的datadir与覆盖版init的XRAY_LOCATION_ASSET都指向
+    # /usr/share/xray, 且xray只认该目录下geoip.dat/geosite.dat这两个固定文件名。
+    # URL使用releases/latest/download, 由GitHub重定向到最新tag(有意不锁定版本, 每次编译取最新数据)。
+    xray_asset_path = os.path.join(global_files_path, "usr", "share", "xray")
+    dl_tasks.append(dl2("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat",
+                        os.path.join(xray_asset_path, "geoip.dat")))
+    dl_tasks.append(dl2("https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat",
+                        os.path.join(xray_asset_path, "geosite.dat")))
+
     wait_dl_tasks(dl_tasks)
 
     # 获取用户信息

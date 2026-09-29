@@ -67,29 +67,20 @@
     include "/etc/nftables.d/cn_ipv4.conf";
     include "/etc/nftables.d/cn_ipv6.conf";
 
-    set myip {
-        type ipv4_addr
-        flags interval
-        auto-merge
-    }
-
-    set myip6 {
-        type ipv6_addr
-        flags interval
-        auto-merge
-    }
-
-    set vps {
-        type ipv4_addr
-        flags interval
-        auto-merge
-    }
-
-    set vps6 {
-        type ipv6_addr
-        flags interval
-        auto-merge
-    }
+    # 这里原先有 myip / myip6 / vps / vps6 四个空集合，配套四条 "ip daddr @myip accept"
+    # "ip daddr @vps accept"，用意是放过路由器自身公网 IP 与 VPS IP。
+    # 但仓库内没有任何地方填充它们（构建期、开机脚本、hotplug 都没有），集合永远为空
+    # = 这四条规则永远不会命中：既白占规则位，又会让人误以为 VPS 已被放行
+    # —— 排查上面那种自环时，这一点极具误导性，故整组删除。
+    #
+    # xray 自身出站的放行，现在完全由 SO_MARK 255 承担（见 xray_prerouting / xray_output
+    # 两条链的首条规则，以及 files/etc/xray/config.json 里各出站的 "sockopt": {"mark": 255}），
+    # 比按 IP 放行更可靠：IP 会变、VPS 域名解析结果会变，SO_MARK 不会。
+    #
+    # 若确实需要按 IP 放行，请在运行时自行定义并填充集合，例如：
+    #   nft add set inet fw4 vps '{ type ipv4_addr; flags interval; auto-merge; }'
+    #   nft add element inet fw4 vps { 203.0.113.10 }
+    # 再按需把 "ip daddr @vps counter accept" 加回链首。
 
     chain xray_prerouting  {
         type filter hook prerouting priority mangle; policy accept;
@@ -104,8 +95,6 @@
         iifname "easytier" counter accept comment "easytier"
         oifname "easytier" counter accept comment "easytier"
 
-        ip daddr @myip counter accept comment "公网IP"
-        ip6 daddr @myip6 counter accept comment "公网IP"
         ip daddr @private counter accept comment "私有IP"
         ip6 daddr @private6 counter accept comment "私有IP"
         ip daddr @direct counter accept comment "直连IP"
@@ -113,19 +102,29 @@
         ip daddr @cn_ipv4 counter accept comment "国内IP"
         ip6 daddr @cn_ipv6 counter accept comment "国内IP"
 
-        ip daddr @vps counter accept comment "vps IP"
-
         meta l4proto { tcp, udp } counter
 
-        meta l4proto { tcp, udp } meta mark set 0x11 tproxy ip to :65535 counter accept comment "Xray"
-        meta l4proto { tcp, udp } meta mark set 0x11 tproxy ip6 to :65535 counter accept comment "Xray"
+        # ⚠️ 顺序不可调换：meta mark set 必须排在 tproxy 之后。
+        # 内核 nft_tproxy_eval 在找不到透明套接字时置 NFT_BREAK，本规则后续语句（含 counter/accept）
+        # 全部跳过，但前面已执行的 meta mark set 不会回滚。若 mark 写在 tproxy 之前，
+        # 失败包会带着 fwmark 0x11 进入 ip rule 的 table 100（local default dev lo），
+        # 却没有任何套接字接收它 —— 表现为"部分流量静默黑洞"（IPv6 未监听、入站端口不一致时最常见）。
+        meta l4proto { tcp, udp } tproxy ip to :65535 meta mark set 0x11 counter accept comment "Xray"
+        meta l4proto { tcp, udp } tproxy ip6 to :65535 meta mark set 0x11 counter accept comment "Xray"
 
         meta l4proto { tcp, udp } counter
     }
 
     chain xray_output {
         type route hook output priority filter -10; policy accept;
-        meta skgid 966 counter accept comment "Xray发出的连接"
+        # ⚠️ 必须排在 skgid 之前。xray 各出站的 sockopt.mark=255 是防止自环的**主保护**，
+        # meta skgid 966 只是兜底：一旦 xray 不是以 gid 966 运行（典型场景是运行时
+        # 升级/重装 xray-core —— 官方 /etc/init.d/xray 会覆盖本地覆盖版，而官方版
+        # 完全没有 procd_set_param user/group），skgid 失配后就会一路落到链尾的
+        # "mark set 0x11"，把 255 改写成 0x11，于是 xray 自己的出站被送进 lo、
+        # 再从 prerouting 被 tproxy 抓回来当成新连接 —— 无限自环，内存可涨到 GB 级。
+        meta mark 0xff counter accept comment "Xray出站(SO_MARK 255)"
+        meta skgid 966 counter accept comment "Xray出站(GID 23333)"
 
         meta l4proto { tcp, udp } counter
 
@@ -136,16 +135,12 @@
         iifname "easytier" counter accept comment "easytier"
         oifname "easytier" counter accept comment "easytier"
 
-        ip daddr @myip counter accept comment "公网IP"
-        ip6 daddr @myip6 counter accept comment "公网IP"
         ip daddr @private counter accept comment "私有IP"
         ip6 daddr @private6 counter accept comment "私有IP"
         ip daddr @direct counter accept comment "直连IP"
         ip6 daddr @direct6 counter accept comment "直连IP"
         ip daddr @cn_ipv4 counter accept comment "国内IP"
         ip6 daddr @cn_ipv6 counter accept comment "国内IP"
-
-        ip daddr @vps counter accept comment "vps IP"
 
         meta l4proto { tcp, udp } counter
 
@@ -156,7 +151,21 @@
 
     chain xray_divert {
         type filter hook prerouting priority mangle -10; policy accept;
-        meta l4proto { tcp, udp } socket transparent 1 meta mark set 0x11 counter accept
+        # 本链是经典 TProxy 配置里 DIVERT 链的 nftables 翻译：把"已经建立连接"的包提前打标，
+        # 让它走 table 100 的 local dev lo，直接交给 xray 的透明套接字。
+        #
+        # 两条纪律：
+        #   1. meta mark 0xff 必须在最前面。本链优先级（mangle -10 = -160）高于 xray_prerouting
+        #      （mangle = -150），而 nftables 的 accept 只结束**当前基链**、不会阻止同钩子的
+        #      其它基链。若在这里把带 255 的包改写成 0x11，后面 xray_prerouting 首条的
+        #      "meta mark 0xff accept" 就再也认不出它，主保护会被悄悄抹掉。
+        #   2. 只匹配 TCP（与官方 `-p tcp -m socket` 一致）。UDP 侧 xray 会为每个目标地址
+        #      建一个绑在"目标地址"上的 FakeUDP 透明套接字，socket transparent 会对它自己
+        #      发出的包命中 —— 那是回路的放大器，交给 xray_prerouting 的 tproxy 表达式
+        #      按 ESTABLISHED/LISTENER 语义处理更稳妥。
+        meta mark 0xff counter accept comment "Xray出站(已带255)"
+        meta skgid 966 counter accept comment "Xray出站(GID 23333)"
+        meta l4proto tcp socket transparent 1 meta mark set 0x11 counter accept
     }
 
 #    chain mosdns_dns_prerouting {

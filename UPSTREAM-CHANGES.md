@@ -89,6 +89,8 @@
 | UC-0015 | 2026-09-29 | 配置改动 | 升级 Go 工具链分支 25.x → 26.x，适配官方 `adguardhome` 包 `go.mod` 的 `go >= 1.26.3` 要求 | `config/{x86_64,rpi4b}/OpenWrt-K/openwrtext.config` | 低 | 保留本地取值；上游若同步升级可撤销 |
 | UC-0016 | 2026-09-29 | 配置改动 | 恢复 `protobuf-compat`：immortalwrt 版 `netdata` 硬依赖它，排除后 `make package/install` 失败 | `config/{x86_64,rpi4b}/OpenWrt-K/local.config`、`AGENTS.md` | 低 | 保留；被排除项的上游声明仍未改动 |
 | UC-0017 | 2026-09-29 | 新增插件 | mosdns（`[38]`，取自 immortalwrt/packages `net/mosdns`）；并把 ddns-go 的启用开关补到 x86_64 | `config/{x86_64,rpi4b}/OpenWrt-K/extpackages.config`、`config/default-extpackages.config`、`config/x86_64/network.config`、`config/x86_64/luci.config`、`README.md`、`AGENTS.md` | 低 | 保留本地条目与开关 |
+| UC-0018 | 2026-09-29 | 预置文件 | 修复 xray 透明代理自环：`xray_output` 补 `meta mark 0xff` 让路、`mark` 移到 `tproxy` 之后、DIVERT 链限定 TCP、删除永不命中的 `myip` / `vps` 空集合、日志降级；并补登 `files/etc/xray/config.json` | `files/etc/nftables.d/xray.nft`、`files/etc/xray/config.json`、`files/etc/config/xray`、`AGENTS.md` | 中 | 保留本地修复；上游无同名文件，`xray-core` 与其 init 的改动须人工比对 |
+| UC-0019 | 2026-09-29 | 预置文件 | 构建期下载 xray geodata（Loyalsoldier 数据集：`geoip.dat` + `geosite.dat`）到 `/usr/share/xray/`，补齐 UC-0018 遗留的"分流数据缺失"缺口；URL 用 `releases/latest/download`（跟随最新，不加锁版本） | `build_helper/prepare.py`、`AGENTS.md` | 低 | 保留本地下载任务；上游若自带 geodata 下载逻辑，需人工比对其数据源与目标路径 |
 
 > 编号规则：`UC-####` 起顺序递增，**永不复用、永不重排**；撤销的条目保留行并标注"已撤销 + 日期 + 原因"。
 
@@ -529,6 +531,66 @@
   - 版本为 immortalwrt 的 `mosdns 5.3.3`（默认分支，未钉版本）；日后上游配置语法变动时，需要同步核对本地 `config.yaml`；
   - 该包 postinst 会 `stop` + `disable`，服务自启仍依赖 `files/etc/uci-defaults/zzz-mosdns`（UC-0013）。
 - 文档同步：AGENTS.md 第 3.1、4.1、4.2 节与 README.md 已更新 ☑
+- 相关提交：——
+
+### UC-0018 · 预置文件 · 修复 xray 透明代理自环（mark 时序 / 0xff 让路 / DIVERT 收窄 / 清理空集合）
+
+- 日期：2026-09-29
+- 变更类型：预置文件（含配置改动）
+- 涉及文件：
+  - files/etc/nftables.d/xray.nft（**核心修复**）
+  - files/etc/xray/config.json（日志降级 `debug` → `warning`、`dnsLog: false`）
+  - files/etc/config/xray（注释订正：主配置已随固件预置，端口 65535 与 nft 强耦合）
+  - AGENTS.md
+- 上游对照：上游没有这些文件（UC-0007 引入），因此本条只修本地实现，不涉及上游内容
+- 现象（设备实测）：部分流量"出不去"——不是丢包，而是**在 nftables 链与内核路由之间循环**，始终无法出站；随后 xray 进程内存从几十 MB 一路涨到接近 2 GB，整机网络明显变差
+- 根因（两处缺陷叠加，均已在源码层面证实）：
+  - **让路缺了一处**：xray 出站套接字带 `SO_MARK 255`（`config.json` 各出站 `sockopt.mark`），本应被 `xray_prerouting` 首条的 `meta mark 0xff accept` 与 `xray_output` 的 `meta skgid 966 accept` 放过。但 `xray_output` **没有** `meta mark 0xff` 这一条，一旦 skgid 失配（`/etc/init.d/xray` 不在包 conffiles 里，运行时升级 / 重装 `xray-core` 会被官方 init 覆盖，而官方 init 完全没有 `procd_set_param user/group`，xray 便以 gid/fsgid 0 运行），包会一路落到链尾的 `mark set 0x11`，**把 255 改写成 0x11** → 命中 `ip rule fwmark 0x11 table 100` 的 `local default dev lo` → 经 `lo` 回到 prerouting → 被 `tproxy` 当成新连接投递给 xray 自己 → xray 再开出站 → 无限自环（每轮回一圈多一套连接 / 协程 / 套接字，内存随之涨到 GB 级）；
+  - **mark 写在了 `tproxy` 之前**：内核 `nft_tproxy_eval` 找不到透明套接字时置 `NFT_BREAK`（后续语句含 `counter`/`accept` 全部跳过），但**已写入的 mark 不回滚**。于是任何 tproxy 未命中的包仍带 `fwmark 0x11` 进 `table 100`，被 `local dev lo` 送到本地却没有套接字接收 —— 静默黑洞（入站端口不一致、未监听该协议族时最典型）。
+- 本地行为（本次改动）：
+  - `xray_output` 链首新增 `meta mark 0xff counter accept comment "Xray出站(SO_MARK 255)"`，排在 `meta skgid 966` **之前** —— 让防自环不再依赖 gid；`skgid 966` 保留为兜底；
+  - `xray_prerouting` 的两条规则改为 `tproxy ip/ip6 to :65535 meta mark set 0x11 counter accept`，**mark 移到 `tproxy` 之后**（与官方 TProxy 教程 `tproxy … meta mark set 1` 的写法一致）：tproxy 成功才打标，失败包保留原标记、按正常路由转发（**由"静默黑洞"变为"直连放行"**，可用性提高但该流量不再经过代理，属有意的取向选择）；
+  - `xray_divert` 链首新增 `meta mark 0xff counter accept`（该链优先级 `mangle -10` = -160，早于 `xray_prerouting`，而 nftables 的 `accept` 只结束当前基链、不阻止同钩子的其它基链 —— 不先让过 0xff 就会把主保护悄悄抹掉）；规则收窄为 `meta l4proto tcp socket transparent 1 …`，与官方 `-p tcp -m socket` 的 DIVERT 语义对齐：UDP 侧 xray 会为每个目标地址建一个绑在目标地址上的 FakeUDP 透明套接字，`socket transparent` 会对它自己发出的包命中，是回路的放大器；
+  - 删除 `myip` / `myip6` / `vps` / `vps6` 四个空集合及配套 4 条 `ip daddr @… accept` 规则：仓库内**没有任何地方填充它们**（构建期、开机脚本、hotplug 均无），永远为空的集合让这几条直连规则永不命中，只在排障时误导人以为"VPS 已放行"。xray 出站的放行已由 `SO_MARK 255` 全链路承担，比按 IP 放行更可靠（IP 与解析结果都会变）。文件内保留注释与运行时 `nft add element` 的恢复示例；
+  - `config.json` 日志降级：`loglevel: debug` + `dnsLog: true` 在自环时会变成日志放大器（procd 经管道转发 logd），改回 `warning` / `false`；
+  - `files/etc/config/xray` 注释订正：主配置**已随固件预置**（原注释写"需自备"），并写明入站 65535 与 nft 里 `tproxy … to :65535` 的强耦合关系。
+- 变更原因：修复设备上真实发生的自环与黑洞；同时把三处让路、mark 时序、端口耦合这些"静默失效"知识固化进文件注释与 AGENTS.md，避免下次靠猜。
+- 冲突风险：中 —— 全部为本地文件，上游不会碰到；风险来自语义：`xray_output` 的规则顺序与 `tproxy` 语句顺序都是**功能性约束**，不可"顺手重排"；`/etc/init.d/xray` 与官方包同名，上游或包更新该文件时需人工比对
+- 上游同步动作：保留本地修复。若上游日后也提供 tproxy 预置，需人工比对 `xray.nft` 的三条链与 `config.json` 的端口 / mark 取值
+- 注意事项：
+  - **排障顺序**：怀疑自环时先跑 `/usr/bin/stop-tproxy`（移除 `ip rule` 与本地路由，回路立刻断；代价是暂时全走直连），**不要只停 xray** —— 路由表还在时，未命中的包会按本文档的缺陷静默黑洞；
+  - **v6 无需额外入站**：`listen: "0.0.0.0"` 在 Go 里是通配地址，`favoriteAddrFamily()` 会建成 **AF_INET6 双栈**套接字（`IPv4zero` 在 `ipToSockaddrInet6()` 中被换成 `IPv6zero`），v4 与 v6 的透明套接字查找都能命中它；改成 `"::"` 会变 v6-only 并打断 v4，**不要改**；
+  - **确认 xray 真实身份**：`grep Gid /proc/$(pidof xray)/status` 的第 4 个字段即 fsgid，不是 966 就说明本地覆盖版 init 已失效（`meta skgid` 取的是套接字 `file->f_cred->fsgid`；`setgid()` 会同步 fsgid，所以覆盖版 init 在场时本应等于 966）；
+  - 遗留未处理（本次未纳入范围）：`config/<目标>/OpenWrt-K/local.config` 排除了 `v2ray-geosite` / `v2ray-geoip`，而官方 `xray-core` 包**并不依赖**它们（`DEPENDS:=$(GO_ARCH_DEPENDS) +ca-bundle`），但 `files/etc/xray/config.json` 的路由规则大量使用 `geosite:*` / `geoip:*`。若固件内没有这两份数据，规则会整体失效、gfw 域名单掉到末条 `direct` 直连 —— 需单独确认与决断。
+- 文档同步：AGENTS.md 第 3.4 / 4.2 节已更新 ☑
+- 相关提交：——
+
+### UC-0019 · 预置文件 · 构建期下载 xray geodata（Loyalsoldier 数据集）
+
+- 日期：2026-09-29
+- 变更类型：预置文件（`prepare.py` 新增下载任务）
+- 涉及文件：
+  - build_helper/prepare.py（在 AdGuardHome 下载任务之后追加两个 `dl2` 任务）
+  - AGENTS.md
+- 上游对照：上游在 `prepare()` 的下载段落里没有该任务，也没有"必须使用 Loyalsoldier 数据集"这一约定
+- 本地行为：
+  - 在 `prepare()` 的下载段落中新增 `xray_asset_path = workdir/files/usr/share/xray`，从 `https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/` 下载 `geoip.dat`（约 15.9 MiB）与 `geosite.dat`（约 10.5 MiB）；
+  - 产物先落入 `workdir/files/`，随后由既有逻辑（`prepare_cfg()` 的 `copytree(global_files_path, openwrt/files)`）并入各目标 rootfs，固件内路径为 `/usr/share/xray/`；
+  - 目录与文件名由 xray 侧约定：`/etc/config/xray` 的 `datadir` 与覆盖版 init 的 `XRAY_LOCATION_ASSET` 都指向 `/usr/share/xray`，xray 只认该目录下的 `geoip.dat` / `geosite.dat`，因此**未改动任何 xray 配置**；
+  - 版本策略：URL 使用 `releases/latest/download`，由 GitHub 重定向到最新 tag —— **有意不锁版本**，每次编译取最新数据（同一提交的两次编译产物可能不同）；
+  - 与排除清单保持互斥：`CONFIG_PACKAGE_v2ray-geoip` / `v2ray-geosite` 仍留在 `local.config` 的排除项中，避免"包安装的文件"与"预置文件"争同一路径。
+- 变更原因：
+  - UC-0018 已记录遗留缺口：`v2ray-geoip` / `v2ray-geosite` 被排除，而 `files/etc/xray/config.json` 依赖 `geosite:category-ads-all` / `gfw` / `github` / `google` 与 `geoip:facebook` / `google` / `netflix` / `telegram` / `twitter`，数据缺失时这些规则整体落空、gfw 域名只剩链尾 `direct` 直连；
+  - 官方 `xray-core`（openwrt-25.12 分支，版本 26.3.27）只安装二进制、`/etc/xray/config.json.example`、`/etc/config/xray` 与 init，**不提供任何 geodata**，缺口只能由外部数据补齐；
+  - 选 Loyalsoldier 而非官方 feed 的 `v2ray-geodata`：后者数据源为 v2fly，实测（解包 geoip.dat / dlc.dat 读取类别表）其 geoip 仅含国家代码与 `PRIVATE` / `TEST` / `ZZ`（**没有** `facebook` / `google` / `netflix` / `telegram` / `twitter`），geosite 也没有 `gfw` 类别（对应物是 `greatfire`），直接换上会让本仓库的上述规则全部失效；Loyalsoldier 版这些类别齐全，`config.json` 一行都不用改，体积 15.86 + 10.46 = 26.3 MiB，也小于 v2fly 组合（22.25 + 2.19 = 24.4 MiB 中真正可用的部分）。
+- 冲突风险：低 —— 仅在上游 `prepare()` 下载段落末尾追加，`files/usr/share/xray/` 也是上游没有的目录
+- 上游同步动作：保留本地下载任务；若上游日后自带 geodata 下载逻辑，需人工比对其数据源（v2fly / Loyalsoldier）与目标路径后再决定是否拆除本地任务
+- 注意事项：
+  - 下载失败会让 `wait_dl_tasks()` 抛错、**整个 prepare 阶段失败**（fail-fast，与 AdGuardHome 段保持一致）；
+  - 这两个文件不在任何包的 conffiles 中，opkg / apk 不感知、也不参与包升级，sysupgrade 时随新固件覆盖；
+  - `.gitignore` 未忽略 `workdir/`，本地执行 prepare 后工作区会出现约 26 MiB 未跟踪文件（本次未处理，需要时再补忽略规则）；
+  - 固件体积：x86_64 与 rpi4b 均增加约 26.3 MiB。
+- 文档同步：AGENTS.md 第 3.4 / 4.2 节已更新 ☑
 - 相关提交：——
 
 ### 新增条目模板

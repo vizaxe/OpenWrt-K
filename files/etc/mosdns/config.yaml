@@ -13,7 +13,6 @@ plugins:
     args:
       size: 1000000
       lazy_cache_ttl: -1
-      edns_key: false
 
   # 双栈 ECS：按“查询类型”分派，A 查询写 IPv4 ECS、AAAA 查询写 IPv6 ECS
   #
@@ -67,7 +66,7 @@ plugins:
     args:
       files:
         - "/etc/mosdns/domain_set/geosite_category-ads-all.txt"
-      domains:
+      exps:
         - "full:wpad.lan"
         - "domain:bsccdn.net"
         - "domain:pkoplink.com"
@@ -147,7 +146,7 @@ plugins:
         - "/etc/mosdns/domain_set/geosite_gfw.txt"
         - "/etc/mosdns/domain_set/geosite_github.txt"
         - "/etc/mosdns/domain_set/geosite_google.txt"
-      domains:
+      exps:
         - "domain:docker.com"
         - "domain:docker.io"
         - "domain:ghcr.io"
