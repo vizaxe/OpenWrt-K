@@ -58,7 +58,7 @@
 | 提交历史 | ❌ 无 | 本地 main 与上游 main 指向同一提交 `67e01a2` |
 | 已提交的本地改动 | ❌ 无 | 尚无本地独有提交 |
 | 工作区未提交改动 | ⚠️ 有 | 改动：`config/**`、`build_helper/prepare.py`、`README.md`、`.gitignore`；新增未跟踪：`AGENTS.md`、`UPSTREAM-CHANGES.md`、`config/{x86_64,rpi4b}/OpenWrt-K/local.config`、`build_helper/utils/local_exclude.py` |
-| 插件清单差异 | ✅ 有 | 新增 EasyTier 与 ddns-go 两组（UC-0001 / UC-0002）；tailscale、旧 DDNS、qBittorrent 链、passwall 家族与 OpenClash 由排除清单关闭（UC-0003 / UC-0004 / UC-0006）；UC-0016 恢复了被 `netdata` 依赖的 `protobuf-compat` |
+| 插件清单差异 | ✅ 有 | 新增 EasyTier 与 ddns-go 两组（UC-0001 / UC-0002）；tailscale、旧 DDNS、qBittorrent 链、passwall 家族与 OpenClash 由排除清单关闭（UC-0003 / UC-0004 / UC-0006）；UC-0016 恢复了被 `netdata` 依赖的 `protobuf-compat`；UC-0017 补入 mosdns（`[38]`）并把 ddns-go 的启用开关补齐到 x86_64 |
 | 预置文件 / 补丁差异 | ✅ 有 | `files/` 新增本地透明代理相关文件（nft 规则、启停脚本、xray 运行身份与 uci 配置），并删除 passwall / OpenClash 专属预置；`patches/` 仍为上游原样 |
 
 **结论**：插件集合相对上游已定制，但**没有删除任何上游内容**——
@@ -73,7 +73,7 @@
 | 编号 | 日期 | 类型 | 对象 | 涉及文件 | 冲突风险 | 同步动作 |
 | --- | --- | --- | --- | --- | --- | --- |
 | UC-0001 | 2026-09-28 | 新增插件 | easytier（`[36]`）、luci-app-easytier（`[37]`） | `config/*/OpenWrt-K/extpackages.config`、`config/{x86_64,rpi4b}/luci.config`、`config/{x86_64,rpi4b}/network.config`、`build_helper/prepare.py`、`README.md` | 低 | 保留本地条目与 `version.mk` 复制逻辑 |
-| UC-0002 | 2026-09-28 | 新增插件 | ddns-go（`[35]`）、luci-app-ddns-go（`[34]`） | `config/*/OpenWrt-K/extpackages.config`、`config/rpi4b/luci.config`、`config/rpi4b/network.config`、`build_helper/prepare.py`、`README.md` | 低 | 保留本地条目与 golang 引用修补逻辑 |
+| UC-0002 | 2026-09-28 | 新增插件 | ddns-go（`[35]`）、luci-app-ddns-go（`[34]`）（x86_64 的启用开关由 UC-0017 补齐） | `config/*/OpenWrt-K/extpackages.config`、`config/rpi4b/luci.config`、`config/rpi4b/network.config`、`build_helper/prepare.py`、`README.md` | 低 | 保留本地条目与 golang 引用修补逻辑 |
 | UC-0003 | 2026-09-28 | 脚本改动 | 本地排除清单机制：`local.config` + `local_exclude.py` + `prepare.py` 钩子 | `config/{x86_64,rpi4b}/OpenWrt-K/local.config`（新增）、`build_helper/utils/local_exclude.py`（新增）、`build_helper/prepare.py` | 低 | 保留本地机制；上游若重写 `parse_configs()`，把出口处的排除循环接回 |
 | UC-0004 | 2026-09-28 | 配置改动 | 排除清单内容：tailscale 组合、旧 DDNS 方案、qBittorrent 及 Qt6 / libtorrent / boost 链（9 个拓展包 + 31 个开关；其中 `protobuf-compat` 已于 UC-0016 恢复） | `config/{x86_64,rpi4b}/OpenWrt-K/local.config` | 低 | 保留；被排除项的上游声明保持原样，不做删除 |
 | UC-0005 | 2026-09-28 | 脚本改动 | `prepare.py` 的 Makefile 引用修补扩展（`golang-package.mk`） | `build_helper/prepare.py` | 低 | 保留（纯新增 2 行） |
@@ -84,10 +84,11 @@
 | UC-0010 | 2026-09-28 | 预置文件 | AdGuardHome 主配置按使用环境调整（上游接 SmartDNS、启用缓存与 DoH、替换订阅源） | `files/etc/adguardhome/AdGuardHome.yaml` | 中 | 保留本地取值；上游改动该文件时人工比对 |
 | UC-0011 | 2026-09-28 | 配置改动 | AdGuardHome 改用官方 openwrt 方案（官方 `luci-app-adguardhome` + `adguardhome` 守护进程包），放弃第三方实现 | `config/{x86_64,rpi4b}/{OpenWrt-K/local.config,network.config}`、`files/etc/uci-defaults/zzz-chenmozhijin`、`files/etc/adguardhome/adguardhome.yaml`、`build_helper/prepare.py` | 中 | 保留本地配置；上游若也切到官方实现，本条可撤销 |
 | UC-0012 | 2026-09-28 | 预置文件 | 把 AdGuardHome 的 uci-defaults 逻辑从 `zzz-chenmozhijin` 拆成独立文件 | `files/etc/uci-defaults/zzz-adguardhome`（新增）、`files/etc/uci-defaults/zzz-chenmozhijin` | 低 | 保留拆分 |
-| UC-0013 | 2026-09-28 | 配置改动 | DNS 分流器由 SmartDNS 换为 mosdns（不装 LuCI 界面、配置由使用者自备 YAML；SmartDNS 的上游行原样保留，关闭语义集中在 local.config） | `config/{x86_64,rpi4b}/network.config`（仅新增 mosdns 行）、`config/{x86_64,rpi4b}/OpenWrt-K/local.config`（关闭 SmartDNS 开关）、`files/etc/uci-defaults/zzz-chenmozhijin`、`files/etc/uci-defaults/zzz-adguardhome`、`files/etc/mosdns/config.yaml`（使用者提供）、`files/etc/uci-defaults/zzz-mosdns`、`build_helper/prepare.py`、`README.md`、`AGENTS.md` | 低 | 保留本地选择；上游若同样切换到 mosdns，本条可撤销 |
+| UC-0013 | 2026-09-28 | 配置改动 | DNS 分流器由 SmartDNS 换为 mosdns（不装 LuCI 界面、配置由使用者自备 YAML；SmartDNS 的上游行原样保留，关闭语义集中在 local.config）。⚠️ 当时误以为官方 feed 自带 mosdns，实际没有 —— 包源由 UC-0017 补齐 | `config/{x86_64,rpi4b}/network.config`（仅新增 mosdns 行）、`config/{x86_64,rpi4b}/OpenWrt-K/local.config`（关闭 SmartDNS 开关）、`files/etc/uci-defaults/zzz-chenmozhijin`、`files/etc/uci-defaults/zzz-adguardhome`、`files/etc/mosdns/config.yaml`（使用者提供）、`files/etc/uci-defaults/zzz-mosdns`、`build_helper/prepare.py`、`README.md`、`AGENTS.md` | 低 | 保留本地选择；上游若同样切换到 mosdns，本条可撤销 |
 | UC-0014 | 2026-09-29 | 配置改动 | 加入 nginx（自管配置，仅用于自定义端口反向代理内网服务；不接管 LuCI、不占 80/443） | `config/{x86_64,rpi4b}/network.config`（仅新增 3 行）、`files/etc/nginx/nginx.conf`、`files/etc/uci-defaults/zzz-nginx`、`AGENTS.md` | 低 | 保留本地选择 |
 | UC-0015 | 2026-09-29 | 配置改动 | 升级 Go 工具链分支 25.x → 26.x，适配官方 `adguardhome` 包 `go.mod` 的 `go >= 1.26.3` 要求 | `config/{x86_64,rpi4b}/OpenWrt-K/openwrtext.config` | 低 | 保留本地取值；上游若同步升级可撤销 |
 | UC-0016 | 2026-09-29 | 配置改动 | 恢复 `protobuf-compat`：immortalwrt 版 `netdata` 硬依赖它，排除后 `make package/install` 失败 | `config/{x86_64,rpi4b}/OpenWrt-K/local.config`、`AGENTS.md` | 低 | 保留；被排除项的上游声明仍未改动 |
+| UC-0017 | 2026-09-29 | 新增插件 | mosdns（`[38]`，取自 immortalwrt/packages `net/mosdns`）；并把 ddns-go 的启用开关补到 x86_64 | `config/{x86_64,rpi4b}/OpenWrt-K/extpackages.config`、`config/default-extpackages.config`、`config/x86_64/network.config`、`config/x86_64/luci.config`、`README.md`、`AGENTS.md` | 低 | 保留本地条目与开关 |
 
 > 编号规则：`UC-####` 起顺序递增，**永不复用、永不重排**；撤销的条目保留行并标注"已撤销 + 日期 + 原因"。
 
@@ -149,7 +150,7 @@
 - 上游对照：上游无此两个包；OpenWrt 官方 `openwrt/packages`、`openwrt/luci` 亦均无，只有 immortalwrt 提供
 - 本地行为：
   - 在 `extpackages.config` **末尾追加** `[34]="luci-app-ddns-go"`（immortalwrt/luci，`applications/luci-app-ddns-go`）与 `[35]="ddns-go"`（immortalwrt/packages，`net/ddns-go`）；
-  - 仅 rpi4b 启用 `CONFIG_PACKAGE_ddns-go=y`、`CONFIG_PACKAGE_luci-app-ddns-go=y`、`CONFIG_PACKAGE_luci-i18n-ddns-go-zh-cn=y`；
+  - 仅 rpi4b 启用 `CONFIG_PACKAGE_ddns-go=y`、`CONFIG_PACKAGE_luci-app-ddns-go=y`、`CONFIG_PACKAGE_luci-i18n-ddns-go-zh-cn=y`（x86_64 当时漏配，已于 UC-0017 补齐同一组开关）；
   - README 内置功能列表加入 `luci-app-ddns-go`。
 - 变更原因：
   - 取代旧的 ddns-scripts 方案（见 UC-0004）；
@@ -405,7 +406,7 @@
 - 上游对照：上游自带 SmartDNS（`smartdns` + `luci-app-smartdns`），并在 `prepare.py` 中用 pymumu 上游 `master` 覆盖 feed、跳过下载 hash 校验；uci-defaults 中预置了一整套 SmartDNS 参数（含 20 个上游 DNS 服务器）
 - 本地行为：
   - 上游配置文件**零修改**：`CONFIG_PACKAGE_smartdns=y`、`CONFIG_PACKAGE_luci-app-smartdns=y` 与语言包行全部保留在 `*.config` 中，关闭动作只由 `local.config` 的 `configs_exclude` 表达（与 tailscale 组合同一处理方式），两个目标配置文件相对上游**只有新增行、没有删除行**；
-  - 分流器改为 **mosdns**（由 immortalwrt/packages 提供，经 feed 直接启用，**不新增扩展包声明**）；
+  - 分流器改为 **mosdns**；⚠️ 当时误认为"官方 feed 自带该包、经 feed 直接启用即可"，实际 `openwrt/packages` 的 `openwrt-25.12` 与 `master` 都没有 `net/mosdns`，于是 `CONFIG_PACKAGE_mosdns=y` 成了**未知符号**，被 `make defconfig` 悄悄丢弃 —— 编译成功、固件里却没有 mosdns。该缺陷已由 **UC-0017** 修复（补上扩展包声明，取自 immortalwrt/packages）；此处保留原记录以说明来龙去脉；
   - **不安装** `luci-app-mosdns`（使用者不需要界面，配置以 YAML 形式提供）；
   - 配置随固件落地：`files/etc/mosdns/config.yaml` 在构建期由 `files/` 覆盖包自带的默认配置（`prepare_rootfs` 先装包、后复制 `files/`），并由 `zzz-mosdns` 显式 `enable` + `restart`（否则包 postinst 的 disable 会让服务不自启）；
   - 删除 `zzz-chenmozhijin` 中的 SmartDNS 配置段（205 行），并删除 `prepare.py` 中 `pymumu/openwrt-smartdns`、`pymumu/luci-app-smartdns` 的克隆、feed 覆盖与 `disable_smartdns_hash_check` 函数；
@@ -501,6 +502,33 @@
   - 安装段把兼容库从 `/usr/protobuf-compat/lib` 拷到 `/usr/lib`，与其他 protobuf 实现的库文件同名；当前配置没有选中会与之冲突的包，**不要**再额外选中同名的 protobuf 库包；
   - 它的语义是"依赖驱动"进入 `.config`，所以 AGENTS.md 第 4.1 节状态列记 `·`（未显式启用）而不是 `✔`。
 - 文档同步：AGENTS.md 第 4.1 节已更新 ☑
+- 相关提交：——
+
+### UC-0017 · 新增插件 · mosdns（`[38]`）与 x86_64 的 ddns-go 开关
+
+- 日期：2026-09-29
+- 变更类型：新增插件 + 配置改动
+- 涉及文件：
+  - config/x86_64/OpenWrt-K/extpackages.config、config/rpi4b/OpenWrt-K/extpackages.config、config/default-extpackages.config（末尾追加 `[38]`）
+  - config/x86_64/network.config（新增 `CONFIG_PACKAGE_ddns-go=y`）
+  - config/x86_64/luci.config（新增 `CONFIG_PACKAGE_luci-app-ddns-go=y`、`CONFIG_PACKAGE_luci-i18n-ddns-go-zh-cn=y`）
+  - README.md、AGENTS.md
+- 上游对照：上游没有 `[38]` 条目；x86_64 的 `*.config` 上游不含 ddns-go 的三个开关（rpi4b 的那组由 UC-0002 已加）
+- 本地行为：
+  - `extpackages.config` 末尾追加 `EXT_PACKAGES_NAME[38]="mosdns"`，仓库 `https://github.com/immortalwrt/packages`、路径 `net/mosdns`、分支留空；UC-0013 写的 `CONFIG_PACKAGE_mosdns=y`（两个目标都有）由此才真正生效；
+  - x86_64 补齐 ddns-go 的三个开关，与 rpi4b 对齐（分别插在字母序位置：`network.config` 的 IP Addresses and Names 段、`luci.config` 的 Applications 段与语言包段）。
+- 变更原因（现象：编译成功，进入系统后发现 mosdns 与 ddns-go 都没装）：
+  - **mosdns**：`openwrt/packages` 的 `openwrt-25.12`（本次编译的 `v25.12.5` 所属分支）与 `master` **都没有** `net/mosdns`（raw 请求 404，GitHub contents API 也确认 net 目录下无此包），只有 immortalwrt/packages 提供。于是 `CONFIG_PACKAGE_mosdns=y` 成了**未知符号**，`make defconfig` 只打印一句 WARNING 就把它丢掉，编译照常成功 —— 典型的静默失败；
+  - **ddns-go**：x86_64 从来没有任何 ddns-go 开关（UC-0002 当时只加了 rpi4b），所以它不是"装丢了"，而是"没被要求装"。本次按使用者要求补上本体 + LuCI 界面 + 中文语言包。
+- 冲突风险：低 —— 三个 `extpackages.config` 均为末尾追加；x86_64 的 `*.config` 为字母序相邻插入
+- 上游同步动作：保留。若日后官方 feed 收录 `net/mosdns`，可改回"官方 feed 直接启用"，并把 `[38]` 条目写进排除清单
+- 注意事项：
+  - mosdns 的 Makefile 用 `include ../../lang/golang/golang-package.mk`，复制到 `package/cmzj_packages/mosdns/` 后由 `prepare.py` 的**通用改写**（UC-0005）修正为 `$(TOPDIR)` 路径，无需额外脚本；它声明 `PKG_BUILD_DEPENDS:=golang/host`，走 UC-0015 的 Go 26.x 工具链；
+  - 官方 feed 没有同名 `mosdns` 包，因此**不需要**在 `prepare.py` 里先 `rmtree` feed 同名目录；
+  - 包自带 `/etc/mosdns/config.yaml`，构建期由 `files/etc/mosdns/config.yaml` 覆盖（`prepare_rootfs` 先装包、后复制 `files/`），与 UC-0013 一致；
+  - 版本为 immortalwrt 的 `mosdns 5.3.3`（默认分支，未钉版本）；日后上游配置语法变动时，需要同步核对本地 `config.yaml`；
+  - 该包 postinst 会 `stop` + `disable`，服务自启仍依赖 `files/etc/uci-defaults/zzz-mosdns`（UC-0013）。
+- 文档同步：AGENTS.md 第 3.1、4.1、4.2 节与 README.md 已更新 ☑
 - 相关提交：——
 
 ### 新增条目模板

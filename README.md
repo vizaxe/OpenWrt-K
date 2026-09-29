@@ -74,6 +74,7 @@
 
 1. 其他部分软件包：  
   xray-core：透明代理核心（配合本地 /etc/nftables.d 规则与 start-tproxy 使用）  
+  mosdns：DNS 分流器（无 LuCI 界面，配置自备，作为 AdGuardHome 上游）  
   ethtool-full：网卡工具用于查询及设置网卡参数  
   sudo：sudo命令支持  
   htop：系统监控与进程管理软件

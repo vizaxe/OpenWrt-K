@@ -90,7 +90,7 @@
 - 把 Makefile 里失效的相对引用改写为 `$(TOPDIR)` 绝对路径：
   `../../luci.mk` → `$(TOPDIR)/feeds/luci/luci.mk`，
   `../../lang/golang/golang-package.mk` → `$(TOPDIR)/feeds/packages/lang/golang/golang-package.mk`
-  （后者是本地新增的改写，ddns-go 依赖它才能编译）；
+  （后者是本地新增的改写，ddns-go 与 mosdns 依赖它才能编译）；
 - 尝试在插件的 `po/` 下建立 `zh-cn -> zh_Hans` 软链。注意**实际行为**：该符号链接只在 `zh_Hans` 不存在、或 `zh_Hans` 是个普通文件时才会创建；`zh_Hans` 已是目录时直接跳过。
   immortalwrt 系插件普遍自带 `po/zh_Hans`，所以这条修补多数情况下不会触发 —— 这**不影响** `luci-i18n-*-zh-cn` 的生成，因为 `openwrt/luci` 的 `luci.mk` 自带 `LUCI_LC_ALIAS.zh_Hans=zh-cn` 映射；
 - 复制完成后删除包目录内的 `.git`；
@@ -162,7 +162,7 @@
 > ⚠️ 手写片段**不含** `make defconfig` 自动推导的依赖项，因此 `·` 只表示"未显式启用"，**不代表绝不会进固件**。
 > 图例：`✔` 启用；`·` 未显式启用；`✗` 被 `local.config` 排除（不克隆、不复制、不进固件）。
 
-### 4.1 拓展软件包（extpackages.config，37 项）
+### 4.1 拓展软件包（extpackages.config，38 项）
 
 “路径”列的 `.` 表示**仓库根目录即包目录**；“分支”列的 `—` 表示使用仓库默认分支。
 
@@ -201,10 +201,11 @@
 | 31 | qt6tools | immortalwrt/packages | utils/qt6tools | — | ✗ | ✗ |
 | 32 | libdouble-conversion | immortalwrt/packages | libs/libdouble-conversion | — | ✗ | ✗ |
 | 33 | protobuf-compat | immortalwrt/packages | libs/protobuf/protobuf-compat | — | · | · |
-| 34 | luci-app-ddns-go | immortalwrt/luci | applications/luci-app-ddns-go | — | · | ✔ |
-| 35 | ddns-go | immortalwrt/packages | net/ddns-go | — | · | ✔ |
+| 34 | luci-app-ddns-go | immortalwrt/luci | applications/luci-app-ddns-go | — | ✔ | ✔ |
+| 35 | ddns-go | immortalwrt/packages | net/ddns-go | — | ✔ | ✔ |
 | 36 | easytier | EasyTier/luci-app-easytier | easytier | — | ✔ | ✔ |
 | 37 | luci-app-easytier | EasyTier/luci-app-easytier | luci-app-easytier | — | ✔ | ✔ |
+| 38 | mosdns | immortalwrt/packages | net/mosdns | — | ✔ | ✔ |
 
 **已知情况说明**（不是错误，是有意为之，别"顺手修正"）：
 
@@ -215,7 +216,8 @@
 - 第 12～14、25 项（passwall 家族与 OpenClash）**被 `local.config` 排除**：代理方案改为「官方 `xray-core` + 自写 nft 规则」，见第 3.4 节与 UC-0006 / UC-0007。第 13 项 `openwrt-passwall-packages` 是包合集，其中 `xray-core` 改从官方 feed 启用。
 - 第 17 项 `luci-app-adguardhome` 已改用**官方实现**：扩展包条目保留、由 `local.config` 排除，改由官方 feed 的 `luci-app-adguardhome`（界面）与 `adguardhome`（守护进程包）接管，见 UC-0011。
 - 第 26 项 `wrtbwmon`：两个目标都**未显式启用**，仅声明（保留源码）。
-- 第 34、35 项（`luci-app-ddns-go`、`ddns-go`）取自 immortalwrt（OpenWrt 官方 `packages` / `luci` 均无这两个包）；`ddns-go` 的 `../../lang/golang/golang-package.mk` 需由 `prepare.py` 自动改写为 `$(TOPDIR)` 路径后才能编译。
+- 第 34、35 项（`luci-app-ddns-go`、`ddns-go`）取自 immortalwrt（OpenWrt 官方 `packages` / `luci` 均无这两个包）；`ddns-go` 的 `../../lang/golang/golang-package.mk` 需由 `prepare.py` 自动改写为 `$(TOPDIR)` 路径后才能编译。原先只给 rpi4b 加了开关，x86_64 已于 UC-0017 补齐（本体 + LuCI 界面 + 中文语言包）。
+- 第 38 项 `mosdns` 同样取自 immortalwrt（**OpenWrt 官方 `packages` 的 `openwrt-25.12` 与 `master` 两个分支都没有 `net/mosdns`**），于 UC-0017 引入。⚠️ 这里有个「静默失败」的坑：只写 `CONFIG_PACKAGE_mosdns=y` 而 feed 中没有该包时，`make defconfig` 只会把它当作**未知符号**丢掉（仅 WARNING），编译照常成功，固件里却没有 mosdns。它同样依赖 `../../lang/golang/golang-package.mk` 的改写。
 - 第 36、37 项（`easytier`、`luci-app-easytier`）来自同一仓库，克隆只发生一次；**本体必须显式声明**，否则 LuCI 界面缺少 `/usr/bin/easytier` 而无法工作；两个包的版本号由仓库根的 `version.mk` 统一提供（`prepare.py` 会把它复制到 `package/cmzj_packages/`）。
 - 第 28 项 `luci-app-qbittorrent` 的 `openwrt-24.10` 分支是上游的版本兼容妥协——虽然当前已被排除，但恢复时不要擅自改分支。
 
@@ -235,7 +237,7 @@
 | `files/etc/adguardhome/adguardhome.yaml` | AdGuardHome 主配置（官方方案的 `config_file`）。内容已按本地环境调整（见 UC-0010），包方案见 UC-0011 |
 | `files/etc/adguardhome/data/filters/` | AdGuardHome 工作目录（官方 `work_dir`，本地设为 `/etc/adguardhome`）下的订阅缓存，编译期由 `prepare.py` 下载刷新；二进制由官方 `adguardhome` 包编译提供，装到 `/usr/bin/AdGuardHome` |
 | `files/etc/AdGuardHome-dnslist(by cmzj).yaml` | 由 `prepare.py` **构建期下载生成**（不纳入版本控制）；当前主配置已清空 `upstream_dns_file`，该清单实际未被引用 |
-| `files/etc/mosdns/config.yaml` | mosdns 主配置（使用者提供）：UDP/TCP 监听 `:5335`（AdGuardHome 的上游）、`http_server` 监听 `:8443`；含 hosts、缓存、双栈 ECS（`ecs_handler` × 2 由 `qtype` 分派）、域名分流（block / proxy / direct / easytier / dhcp）与 DoT 上游。**只使用官方 mosdns 插件**，不依赖任何自定义分支。构建期由 `files/` 覆盖包自带的默认配置 |
+| `files/etc/mosdns/config.yaml` | mosdns 主配置（使用者提供）：UDP/TCP 监听 `:5335`（AdGuardHome 的上游）、`http_server` 监听 `:8443`；含 hosts、缓存、双栈 ECS（`ecs_handler` × 2 由 `qtype` 分派）、域名分流（block / proxy / direct / easytier / dhcp）与 DoT 上游。本体取自 immortalwrt/packages（**官方 feed 没有此包**，见第 4.1 节第 38 项），不依赖任何自定义分支。构建期由 `files/` 覆盖包自带的默认配置 |
 | `files/etc/mosdns/domain_set/` | 域名分流规则文本（`geosite_category-ads-all` / `geosite_gfw` / `geosite_github` / `geosite_google`，约 4 MB，随固件落地） |
 | `files/etc/mosdns/ip_set/` | IP 集合规则（`geoip_private.txt`）；当前配置尚未引用，属预留 |
 | `files/etc/uci-defaults/zzz-chenmozhijin` | 首次开机写入 LAN 地址、dnsmasq 缓存开关、aria2 配置、固件署名（AdGuardHome 相关已拆出，SmartDNS 相关随换用 mosdns 移除） |
