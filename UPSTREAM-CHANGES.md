@@ -58,7 +58,7 @@
 | 提交历史 | ❌ 无 | 本地 main 与上游 main 指向同一提交 `67e01a2` |
 | 已提交的本地改动 | ❌ 无 | 尚无本地独有提交 |
 | 工作区未提交改动 | ⚠️ 有 | 改动：`config/**`、`build_helper/prepare.py`、`README.md`、`.gitignore`；新增未跟踪：`AGENTS.md`、`UPSTREAM-CHANGES.md`、`config/{x86_64,rpi4b}/OpenWrt-K/local.config`、`build_helper/utils/local_exclude.py` |
-| 插件清单差异 | ✅ 有 | 新增 EasyTier 与 ddns-go 两组（UC-0001 / UC-0002）；tailscale、旧 DDNS、qBittorrent 链、passwall 家族与 OpenClash 由排除清单关闭（UC-0003 / UC-0004 / UC-0006） |
+| 插件清单差异 | ✅ 有 | 新增 EasyTier 与 ddns-go 两组（UC-0001 / UC-0002）；tailscale、旧 DDNS、qBittorrent 链、passwall 家族与 OpenClash 由排除清单关闭（UC-0003 / UC-0004 / UC-0006）；UC-0016 恢复了被 `netdata` 依赖的 `protobuf-compat` |
 | 预置文件 / 补丁差异 | ✅ 有 | `files/` 新增本地透明代理相关文件（nft 规则、启停脚本、xray 运行身份与 uci 配置），并删除 passwall / OpenClash 专属预置；`patches/` 仍为上游原样 |
 
 **结论**：插件集合相对上游已定制，但**没有删除任何上游内容**——
@@ -75,7 +75,7 @@
 | UC-0001 | 2026-09-28 | 新增插件 | easytier（`[36]`）、luci-app-easytier（`[37]`） | `config/*/OpenWrt-K/extpackages.config`、`config/{x86_64,rpi4b}/luci.config`、`config/{x86_64,rpi4b}/network.config`、`build_helper/prepare.py`、`README.md` | 低 | 保留本地条目与 `version.mk` 复制逻辑 |
 | UC-0002 | 2026-09-28 | 新增插件 | ddns-go（`[35]`）、luci-app-ddns-go（`[34]`） | `config/*/OpenWrt-K/extpackages.config`、`config/rpi4b/luci.config`、`config/rpi4b/network.config`、`build_helper/prepare.py`、`README.md` | 低 | 保留本地条目与 golang 引用修补逻辑 |
 | UC-0003 | 2026-09-28 | 脚本改动 | 本地排除清单机制：`local.config` + `local_exclude.py` + `prepare.py` 钩子 | `config/{x86_64,rpi4b}/OpenWrt-K/local.config`（新增）、`build_helper/utils/local_exclude.py`（新增）、`build_helper/prepare.py` | 低 | 保留本地机制；上游若重写 `parse_configs()`，把出口处的排除循环接回 |
-| UC-0004 | 2026-09-28 | 配置改动 | 排除清单内容：tailscale 组合、旧 DDNS 方案、qBittorrent 及 Qt6 / libtorrent / boost 链（9 个拓展包 + 31 个开关） | `config/{x86_64,rpi4b}/OpenWrt-K/local.config` | 低 | 保留；被排除项的上游声明保持原样，不做删除 |
+| UC-0004 | 2026-09-28 | 配置改动 | 排除清单内容：tailscale 组合、旧 DDNS 方案、qBittorrent 及 Qt6 / libtorrent / boost 链（9 个拓展包 + 31 个开关；其中 `protobuf-compat` 已于 UC-0016 恢复） | `config/{x86_64,rpi4b}/OpenWrt-K/local.config` | 低 | 保留；被排除项的上游声明保持原样，不做删除 |
 | UC-0005 | 2026-09-28 | 脚本改动 | `prepare.py` 的 Makefile 引用修补扩展（`golang-package.mk`） | `build_helper/prepare.py` | 低 | 保留（纯新增 2 行） |
 | UC-0006 | 2026-09-28 | 配置改动 | 排除清单新增：passwall / passwall2 / OpenClash 及其代理生态（4 个拓展包 + 49 个配置开关） | `config/{x86_64,rpi4b}/OpenWrt-K/local.config` | 低 | 保留；上游条目与开关保持原样 |
 | UC-0007 | 2026-09-28 | 预置文件 | 本地 xray 透明代理方案：`kmod-nft-tproxy`、官方 feed 的 `xray-core`、nft 规则与启停脚本、xray 运行身份 | `config/{x86_64,rpi4b}/{kmod,network}.config`、`files/etc/nftables.d/`、`files/etc/init.d/xray`、`files/etc/uci-defaults/zzz-xray-user`、`files/etc/config/xray`、`files/usr/bin/{start,stop}-tproxy` | 中 | 保留本地文件与开关；上游无同名文件 |
@@ -87,6 +87,7 @@
 | UC-0013 | 2026-09-28 | 配置改动 | DNS 分流器由 SmartDNS 换为 mosdns（不装 LuCI 界面、配置由使用者自备 YAML；SmartDNS 的上游行原样保留，关闭语义集中在 local.config） | `config/{x86_64,rpi4b}/network.config`（仅新增 mosdns 行）、`config/{x86_64,rpi4b}/OpenWrt-K/local.config`（关闭 SmartDNS 开关）、`files/etc/uci-defaults/zzz-chenmozhijin`、`files/etc/uci-defaults/zzz-adguardhome`、`files/etc/mosdns/config.yaml`（使用者提供）、`files/etc/uci-defaults/zzz-mosdns`、`build_helper/prepare.py`、`README.md`、`AGENTS.md` | 低 | 保留本地选择；上游若同样切换到 mosdns，本条可撤销 |
 | UC-0014 | 2026-09-29 | 配置改动 | 加入 nginx（自管配置，仅用于自定义端口反向代理内网服务；不接管 LuCI、不占 80/443） | `config/{x86_64,rpi4b}/network.config`（仅新增 3 行）、`files/etc/nginx/nginx.conf`、`files/etc/uci-defaults/zzz-nginx`、`AGENTS.md` | 低 | 保留本地选择 |
 | UC-0015 | 2026-09-29 | 配置改动 | 升级 Go 工具链分支 25.x → 26.x，适配官方 `adguardhome` 包 `go.mod` 的 `go >= 1.26.3` 要求 | `config/{x86_64,rpi4b}/OpenWrt-K/openwrtext.config` | 低 | 保留本地取值；上游若同步升级可撤销 |
+| UC-0016 | 2026-09-29 | 配置改动 | 恢复 `protobuf-compat`：immortalwrt 版 `netdata` 硬依赖它，排除后 `make package/install` 失败 | `config/{x86_64,rpi4b}/OpenWrt-K/local.config`、`AGENTS.md` | 低 | 保留；被排除项的上游声明仍未改动 |
 
 > 编号规则：`UC-####` 起顺序递增，**永不复用、永不重排**；撤销的条目保留行并标注"已撤销 + 日期 + 原因"。
 
@@ -190,10 +191,10 @@
   - config/x86_64/OpenWrt-K/local.config
   - config/rpi4b/OpenWrt-K/local.config
 - 上游对照：这些包与开关在上游 `extpackages.config`、各目标 `*.config` 中**全部保持原样**，本地一个都没有删除
-- 本地行为：清单里排除以下内容（共 9 个拓展包 + 31 个配置符号）：
+- 本地行为：清单里排除以下内容（共 9 个拓展包 + 31 个配置符号；其中 `protobuf-compat` 已于 UC-0016 恢复，理由见该条）：
   - tailscale 组合：`tailscale`、`luci-app-tailscale-community`，以及它们的 4 个开关；
   - 旧 DDNS 方案：`ddns-scripts_aliyun`，以及 rpi4b 上的 `ddns-scripts`、`ddns-scripts-cloudflare`、`ddns-scripts-dnspod`、`ddns-scripts-services`、`luci-app-ddns` 与 3 个 `luci-i18n-ddns-*`；
-  - qBittorrent 及其构建链：`luci-app-qbittorrent`、`qBittorrent-Enhanced-Edition`、`qt6base`、`qt6tools`、`libdouble-conversion`、`protobuf-compat`，以及界面开关、Qt6 运行时、`libtorrent-rasterbar` 与 boost 系列。
+  - qBittorrent 及其构建链：`luci-app-qbittorrent`、`qBittorrent-Enhanced-Edition`、`qt6base`、`qt6tools`、`libdouble-conversion`，以及界面开关、Qt6 运行时、`libtorrent-rasterbar` 与 boost 系列。~~`protobuf-compat`~~ 已于 UC-0016 恢复（它其实由 `netdata` 依赖，不属于本条要下线的 qt6 链）。
   - 注意：`configs_exclude` 刻意**逐条精确列出**，不使用 `luci-i18n-ddns-*` 这类通配，以免误伤本地新增的 `luci-i18n-ddns-go-zh-cn`。
 - 变更原因：这三组是本次定制的对象 —— tailscale / ddns-scripts 被新方案取代，qBittorrent 链整体下线。用清单表达可使上游文件保持原样。
 - 冲突风险：低 —— 只改本地新增文件
@@ -474,6 +475,32 @@
   - 若 26.x 工具链本身构建异常，退路是放弃"源码编译官方包"、改回构建期下载 AdGuardHome 官方预编译二进制（UC-0009 的做法）；
   - `config_build_tool.sh` 内有两处 `22.x` 与该键相关（生成/重置配置时的默认值），不是当前生效值，未改动。
 - 文档同步：AGENTS.md 无需改动（4.1 插件表与 3.2 特殊处理表均未变）☑
+- 相关提交：——
+
+### UC-0016 · 配置改动 · 恢复 `protobuf-compat`（修复 netdata 依赖缺失导致的构建失败）
+
+- 日期：2026-09-29
+- 变更类型：配置改动
+- 涉及文件：
+  - config/x86_64/OpenWrt-K/local.config（删掉 `extpackages_exclude=protobuf-compat` 一行，补上为什么不能排除的注释）
+  - config/rpi4b/OpenWrt-K/local.config（同上）
+  - AGENTS.md（第 4.1 节表格 `[33]` 状态列 + 已知情况说明）
+- 上游对照：`extpackages.config` 中该条目（上游 `[33]`）自始至终**原样保留**，本地这次只是"不再排除"，不是新增声明
+- 本地行为：`protobuf-compat` 重新参与克隆与复制，并由 `defconfig` 依据 `netdata` 的依赖**自动选中**；任何 `*.config` 里都没有也不需要写 `CONFIG_PACKAGE_protobuf-compat`
+- 变更原因：UC-0004 把它与 qBittorrent 链一起排除后，CI 在 `make package/install` 阶段失败：
+  `ERROR: unable to select packages: protobuf-compat (no such package): required by: netdata-1.38.1-r5[protobuf-compat]`。
+  根因有两层：
+  - `prepare.py::prepare_cfg()` 用 immortalwrt/packages 的 `admin/netdata` **覆盖**官方 feed 的同名包，而这一版（1.38.1-r5）的 Makefile 把 `+protobuf-compat` 与 `PKG_BUILD_DEPENDS:=protobuf-compat/host` 写成**必需依赖**（官方 25.12 的 netdata 1.33.1 并不需要 protobuf）；
+  - 排除清单只能拦"扩展包要不要克隆"，拦不住依赖解析：`defconfig` 阶段仅打印
+    `WARNING: Makefile 'package/feeds/packages/netdata/Makefile' has a dependency on 'protobuf-compat', which does not exist`（非致命，构建继续），
+    直到安装软件包时 apk 才报 `no such package` 并终止。日志里同时出现的 `WARNING: your configuration is out of sync.` 是同一根因的伴生现象，不是第二个问题。
+- 冲突风险：低 —— 只改本地新增文件与文档
+- 上游同步动作：保留。它自身只依赖 `zlib` / `libatomic` / `libstdcpp` / `protobuf-compat-lite`，与 qt6 链无关，**不会**把已下线的 qBittorrent 相关包拉回来；若日后 `netdata` 覆盖逻辑被移除、或上游 feed 换掉这份依赖，可再把它写回排除清单
+- 注意事项：
+  - 代价是 host 与 target 各编译一次 protobuf 3.17.3（该包自带 `HostBuild`），固件体积约 +1.5 MB（`libprotobuf` / `libprotoc` / `libprotobuf-lite`）；
+  - 安装段把兼容库从 `/usr/protobuf-compat/lib` 拷到 `/usr/lib`，与其他 protobuf 实现的库文件同名；当前配置没有选中会与之冲突的包，**不要**再额外选中同名的 protobuf 库包；
+  - 它的语义是"依赖驱动"进入 `.config`，所以 AGENTS.md 第 4.1 节状态列记 `·`（未显式启用）而不是 `✔`。
+- 文档同步：AGENTS.md 第 4.1 节已更新 ☑
 - 相关提交：——
 
 ### 新增条目模板

@@ -200,7 +200,7 @@
 | 30 | qt6base | immortalwrt/packages | libs/qt6base | — | ✗ | ✗ |
 | 31 | qt6tools | immortalwrt/packages | utils/qt6tools | — | ✗ | ✗ |
 | 32 | libdouble-conversion | immortalwrt/packages | libs/libdouble-conversion | — | ✗ | ✗ |
-| 33 | protobuf-compat | immortalwrt/packages | libs/protobuf/protobuf-compat | — | ✗ | ✗ |
+| 33 | protobuf-compat | immortalwrt/packages | libs/protobuf/protobuf-compat | — | · | · |
 | 34 | luci-app-ddns-go | immortalwrt/luci | applications/luci-app-ddns-go | — | · | ✔ |
 | 35 | ddns-go | immortalwrt/packages | net/ddns-go | — | · | ✔ |
 | 36 | easytier | EasyTier/luci-app-easytier | easytier | — | ✔ | ✔ |
@@ -210,7 +210,8 @@
 
 - 编号 `1～33` 与上游 `extpackages.config` 一一对应，`34` 起为本地新增。**本地不删除上游条目**：需要关闭某项时写进 `local.config`，合并上游才省事。
 - 第 7 项 `shortcut-fe`：其内核模块（`kmod-shortcut-fe`、`kmod-shortcut-fe-cm`、`kmod-fast-classifier`、`kmod-shortcut-fe-drv`）被 `compile.config` 的 `kmod_compile_exclude_list` **排除编译**，属"保留源码、当前不启用"。
-- 第 9、10、27～33 项**被 `local.config` 排除**：tailscale 组合（9、10）、旧 DDNS 方案（27）、qBittorrent 及 Qt6 / libtorrent / boost 依赖链（28～33）。它们既不进固件，也不会被复制源码；上游声明保持原样，随时可以恢复。
+- 第 9、10、27～32 项**被 `local.config` 排除**：tailscale 组合（9、10）、旧 DDNS 方案（27）、qBittorrent 及 Qt6 / libdouble-conversion 依赖链（28～32）。它们既不进固件，也不会被复制源码；上游声明保持原样，随时可以恢复。
+- 第 33 项 `protobuf-compat` **不排除**（UC-0016）：它虽与 qBittorrent 那批声明相邻，但真正需要它的是被 `prepare.py` 覆盖进来的 immortalwrt `netdata` —— 那份 `Makefile` 把 `+protobuf-compat` 与 `PKG_BUILD_DEPENDS:=protobuf-compat/host` 写成必需依赖。排除它时 `defconfig` 只打印 `dependency on 'protobuf-compat', which does not exist` 的 WARNING，直到 `make package/install` 阶段才以 apk `no such package` 报错失败。它自身只依赖 `zlib` / `libatomic` / `libstdcpp` / `protobuf-compat-lite`，不会把已下线的 qt6 链拉回来。
 - 第 12～14、25 项（passwall 家族与 OpenClash）**被 `local.config` 排除**：代理方案改为「官方 `xray-core` + 自写 nft 规则」，见第 3.4 节与 UC-0006 / UC-0007。第 13 项 `openwrt-passwall-packages` 是包合集，其中 `xray-core` 改从官方 feed 启用。
 - 第 17 项 `luci-app-adguardhome` 已改用**官方实现**：扩展包条目保留、由 `local.config` 排除，改由官方 feed 的 `luci-app-adguardhome`（界面）与 `adguardhome`（守护进程包）接管，见 UC-0011。
 - 第 26 项 `wrtbwmon`：两个目标都**未显式启用**，仅声明（保留源码）。
