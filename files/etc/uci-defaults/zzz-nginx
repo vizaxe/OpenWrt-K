@@ -26,7 +26,7 @@ if has_package nginx-ssl;then
   # 清理可能残留的 uci 生成物：只要 /etc/nginx/uci.conf 存在（且其目标有效），
   # nginx_init() 就会优先使用它，本地 nginx.conf 反而不生效。
   # 全新刷机时这两个文件本就不存在，此处仅作兜底（例如设备此前以 uci 模式运行过）。
-  rm -f /var/lib/nginx/uci.conf /etc/nginx/uci.conf
+  rm -f /var/lib/nginx/uci.conf /etc/nginx/uci.conf /etc/nginx/uci.conf.template
   /etc/init.d/nginx enable
   /etc/init.d/nginx restart
 fi

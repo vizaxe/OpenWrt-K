@@ -12,8 +12,10 @@ from typing import Any
 
 import pygit2
 
+from .utils.adguardhome import UPSTREAM_DNS_LIST_URL, load_filter_downloads, load_upstream_dns_file
 from .utils.downloader import DLTask, dl2, wait_dl_tasks
 from .utils.error import ConfigError, ConfigParseError
+from .utils.geosite import load_domainset_config, write_domainset
 from .utils.local_exclude import filter_config_text, filter_extpackages, load_local_exclude
 from .utils.logger import logger
 from .utils.network import get_gh_repo_last_releases, request_get
@@ -179,31 +181,21 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
     shutil.copytree(os.path.join(paths.openwrt_k, "files"), global_files_path, symlinks=True)
     adg_filters_path = os.path.join(global_files_path, "etc", "adguardhome", "data", "filters")
     os.makedirs(adg_filters_path, exist_ok=True)
-    filters = {"1628750870.txt": "https://adguardteam.github.io/AdGuardSDNSFilter/Filters/filter.txt",
-               "1628750871.txt": "https://anti-ad.net/easylist.txt",
-               "1677875715.txt": "https://easylist-downloads.adblockplus.org/easylist.txt",
-               "1677875716.txt": "https://easylist-downloads.adblockplus.org/easylistchina.txt",
-               "1677875717.txt": "https://raw.githubusercontent.com/cjx82630/cjxlist/master/cjx-annoyance.txt",
-               "1677875718.txt": "https://raw.githubusercontent.com/zsakvo/AdGuard-Custom-Rule/master/rule/zhihu-strict.txt",
-               "1677875720.txt": "https://gist.githubusercontent.com/Ewpratten/a25ae63a7200c02c850fede2f32453cf/raw/b9318009399b99e822515d388b8458557d828c37/hosts-yt-ads",
-               "1677875724.txt": "https://raw.githubusercontent.com/banbendalao/ADgk/master/ADgk.txt",
-               "1677875725.txt": "https://www.i-dont-care-about-cookies.eu/abp/",
-               "1677875726.txt": "https://raw.githubusercontent.com/jdlingyu/ad-wars/master/hosts",
-               "1677875727.txt": "https://raw.githubusercontent.com/Goooler/1024_hosts/master/hosts",
-               "1677875728.txt": "https://winhelp2002.mvps.org/hosts.txt",
-               "1677875733.txt": "https://raw.githubusercontent.com/hl2guide/Filterlist-for-AdGuard/master/filter_whitelist.txt",
-               "1677875734.txt": "https://raw.githubusercontent.com/hg1978/AdGuard-Home-Whitelist/master/whitelist.txt",
-               "1677875735.txt": "https://raw.githubusercontent.com/mmotti/adguard-home-filters/master/whitelist.txt",
-               "1677875737.txt": "https://raw.githubusercontent.com/liwenjie119/adg-rules/master/white.txt",
-               "1677875739.txt": "https://raw.githubusercontent.com/JamesDamp/AdGuard-Home---Personal-Whitelist/master/AdGuardHome-Whitelist.txt",
-               #"1677875740.txt": "https://raw.githubusercontent.com/scarletbane/AdGuard-Home-Whitelist/main/whitelist.txt"
-    }
+    # 订阅清单从AdGuardHome主配置读取(见UC-0021), 不再硬编码;
+    # 只预置enabled为真的过滤器, 缓存文件名取配置里的filter id, 因为
+    # AdGuardHome是按id去寻找data/filters/<id>.txt的, 名字对不上等于没预置。
+    adguardhome_config = os.path.join(global_files_path, "etc", "adguardhome", "adguardhome.yaml")
+    filters = load_filter_downloads(adguardhome_config)
+
     dl_tasks: list[DLTask] = []
     for name, url in filters.items():
         dl_tasks.append(dl2(url, os.path.join(adg_filters_path, name)))
 
-    dl_tasks.append(dl2("https://raw.githubusercontent.com/chenmozhijin/AdGuardHome-Rules/main/AdGuardHome-dnslist(by%20cmzj).yaml",
-                     os.path.join(global_files_path, "etc", "AdGuardHome-dnslist(by cmzj).yaml")))
+    # 上游DNS分流清单只在配置确实引用时才下载, 落点用配置里的路径(见UC-0022):
+    # 主配置的upstream_dns_file为空时AdGuardHome不会读它, 下载了也是白下。
+    dnslist_rel_path = load_upstream_dns_file(adguardhome_config)
+    if dnslist_rel_path:
+        dl_tasks.append(dl2(UPSTREAM_DNS_LIST_URL, os.path.join(global_files_path, dnslist_rel_path)))
 
     # 下载xray分流数据(geodata): 采用Loyalsoldier的数据集。
     # 注意不能改用官方feed的v2ray-geodata(数据源为v2fly): 其实测geoip只有国家代码(没有facebook/google/
@@ -220,6 +212,23 @@ def prepare(configs: dict[str, dict[str, Any]]) -> None:
                         os.path.join(xray_asset_path, "geosite.dat")))
 
     wait_dl_tasks(dl_tasks)
+
+    # 把域名集清单与解包工具一并放进固件, 供设备端 `openwrt-k update mosdns` 使用(与构建期同源):
+    # 设备上用 python3 + geosite.py -c <清单> -o <目录> 即可从 /usr/share/xray/geosite.dat 重新解出规则。
+    shutil.copyfile(os.path.join(paths.root, "config", "geosite-domainset.config"),
+                    os.path.join(global_files_path, "etc", "mosdns", "domainset.list"))
+    shutil.copyfile(os.path.join(paths.build_helper, "utils", "geosite.py"),
+                    os.path.join(global_files_path, "usr", "share", "cmzj", "geosite.py"))
+
+    # 用刚下载的geosite.dat刷新mosdns域名集(清单见config/geosite-domainset.config)。
+    # 目的: 让xray的分流数据与mosdns的域名集同源, 不再各自离线维护而逐渐漂移。
+    # 清单不存在或没有有效项时不做任何事, 此时domain_set沿用仓库内的快照文件。
+    domainset_mapping = load_domainset_config(os.path.join(paths.root, "config", "geosite-domainset.config"))
+    if domainset_mapping:
+        stats = write_domainset(os.path.join(global_files_path, "usr", "share", "xray", "geosite.dat"), domainset_mapping,
+                                os.path.join(global_files_path, "etc", "mosdns", "domain_set"))
+        for name, count in stats.items():
+            logger.info("域名集%s已刷新: %d 条", name, count)
 
     # 获取用户信息
     logger.info("编译者：%s", compiler)

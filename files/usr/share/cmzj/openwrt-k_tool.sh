@@ -26,6 +26,12 @@ main() {
                 tool)
                     update_tool
                     ;;
+                geodata)
+                    update_geodata
+                    ;;
+                mosdns)
+                    update_mosdns
+                    ;;
                 *)
                  echo "不支持的参数 $arg"            
             esac
@@ -144,17 +150,38 @@ update_rule(){
     else
         echo "未检测到aria2，跳过更新aria2 BT Tracker" 
     fi
-    if has_package luci-app-adguardhome && has_package smartdns;then
-        echo "开始更新adguardhome上游 DNS 服务器分流规则（/etc/AdGuardHome-dnslist(by cmzj).yaml)" 
-        mkdir -p $TMPDIR/update/rule/adguardhome
-        cd $TMPDIR/update/rule/adguardhome
-        [[ -d $TMPDIR ]] && rm -rf $TMPDIR/update/rule/adguardhome/* || exit 1
-        curl -s -L --retry 6 --connect-timeout 20 "https://raw.githubusercontent.com/chenmozhijin/AdGuardHome-Rules/main/AdGuardHome-dnslist(by%20cmzj).yaml" -o "AdGuardHomednslist" || download_failed
-        cat ./AdGuardHomednslist > /etc/AdGuardHome-dnslist"(by cmzj)".yaml
-        /etc/init.d/AdGuardHome restart
-        echo "更新adguardhome上游 DNS 服务器分流规则（/etc/AdGuardHome-dnslist(by cmzj).yaml)完成"
+    if has_package luci-app-adguardhome || has_package adguardhome;then
+        adg_config=""
+        for candidate in /etc/adguardhome/adguardhome.yaml /etc/AdGuardHome.yaml;do
+            if [ -f "$candidate" ];then
+                adg_config="$candidate"
+                break
+            fi
+        done
+        if [ -z "$adg_config" ];then
+            echo "未找到AdGuardHome主配置，跳过更新上游 DNS 服务器分流规则"
+        else
+            upstream_dns_file=$(sed -n "s/^[[:space:]]*upstream_dns_file:[[:space:]]*//p" "$adg_config" | sed -e 's/[[:space:]]*#.*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" | sed -n 1p)
+            if [ -z "$upstream_dns_file" ];then
+                echo "AdGuardHome配置未引用上游 DNS 服务器分流规则(upstream_dns_file为空)，跳过更新"
+            else
+                echo "开始更新adguardhome上游 DNS 服务器分流规则（$upstream_dns_file）"
+                mkdir -p $TMPDIR/update/rule/adguardhome
+                cd $TMPDIR/update/rule/adguardhome
+                curl -s -L --retry 6 --connect-timeout 20 "https://raw.githubusercontent.com/chenmozhijin/AdGuardHome-Rules/main/AdGuardHome-dnslist(by%20cmzj).yaml" -o "AdGuardHomednslist" || download_failed
+                if [ ! -s AdGuardHomednslist ];then
+                    download_failed
+                fi
+                if cat ./AdGuardHomednslist > "$upstream_dns_file";then
+                    /etc/init.d/AdGuardHome restart
+                    echo "更新adguardhome上游 DNS 服务器分流规则（$upstream_dns_file)完成"
+                else
+                    echo "错误：无法写入$upstream_dns_file，请检查该路径所在目录是否存在"
+                fi
+            fi
+        fi
     else
-        echo "未检测到luci-app-adguardhome与smartdns或其中之一，跳过更新adguardhome上游 DNS 服务器分流规则" 
+        echo "未检测到adguardhome，跳过更新adguardhome上游 DNS 服务器分流规则"
     fi
     if has_package luci-app-openclash ;then
         echo "开始更新openclash直连规则(by 沉默の金)与代理规则(by 沉默の金)"
@@ -200,6 +227,88 @@ update_rule(){
     else
         echo "未检测到luci-app-openclash，跳过更新openclash规则集"
     fi
+}
+
+update_geodata() {
+    check_github
+    if [ ! -d /usr/share/xray ];then
+        echo "错误:未找到目录/usr/share/xray，请确认xray已安装"
+        exit 1
+    fi
+    echo "开始更新xray的geoip/geosite分流数据(Loyalsoldier数据集)"
+    mkdir -p $TMPDIR/update/geodata
+    cd $TMPDIR/update/geodata
+    curl -s -L --retry 6 --connect-timeout 20 "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" -o geoip.dat || download_failed
+    curl -s -L --retry 6 --connect-timeout 20 "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat" -o geosite.dat || download_failed
+    if [ ! -s geoip.dat ] || [ ! -s geosite.dat ];then
+        download_failed
+    fi
+    # 两个文件都下载完整后才替换，避免只换掉一半
+    mv -f geoip.dat /usr/share/xray/geoip.dat
+    mv -f geosite.dat /usr/share/xray/geosite.dat
+    echo "已更新："
+    ls -l /usr/share/xray/geoip.dat /usr/share/xray/geosite.dat
+    if [ -x /etc/init.d/xray ];then
+        echo "重启xray"
+        /etc/init.d/xray restart
+    else
+        echo "未找到/etc/init.d/xray，请自行重启xray使新数据生效"
+    fi
+    echo "提示:mosdns的域名集不会自动跟随，需要时再执行 openwrt-k update mosdns"
+    echo "更新geoip/geosite完成"
+}
+
+update_mosdns() {
+    if ! type python3 >/dev/null 2>&1;then
+        echo "错误:未检测到python3(固件中由python3-light提供)，无法解包geosite.dat"
+        exit 1
+    fi
+    if [ ! -f /usr/share/cmzj/geosite.py ];then
+        echo "错误:未找到解包工具/usr/share/cmzj/geosite.py"
+        exit 1
+    fi
+    # 数据源就是xray正在用的那一份，保证两者的分流数据严格同源
+    if [ ! -f /usr/share/xray/geosite.dat ];then
+        echo "错误:未找到/usr/share/xray/geosite.dat，请先执行 openwrt-k update geodata"
+        exit 1
+    fi
+    domainset_list=""
+    for candidate in /etc/mosdns/domainset.list /etc/mosdns/domain_set.list;do
+        if [ -f "$candidate" ];then
+            domainset_list="$candidate"
+            break
+        fi
+    done
+    if [ -z "$domainset_list" ];then
+        echo "错误:未找到域名集清单(domainset.list)，无法确定要解出哪些规则"
+        exit 1
+    fi
+    if [ ! -d /etc/mosdns/domain_set ];then
+        echo "错误:未找到目录/etc/mosdns/domain_set"
+        exit 1
+    fi
+    mkdir -p $TMPDIR/update/mosdns
+    echo "开始从/usr/share/xray/geosite.dat解出mosdns域名集(清单：$domainset_list)"
+    if ! python3 /usr/share/cmzj/geosite.py -s /usr/share/xray/geosite.dat -c "$domainset_list" -o $TMPDIR/update/mosdns;then
+        echo "错误:解包失败"
+        exit 1
+    fi
+    for file in $TMPDIR/update/mosdns/*;do
+        if [ ! -s "$file" ];then
+            continue
+        fi
+        mv -f "$file" /etc/mosdns/domain_set/$(basename "$file")
+    done
+    echo "已更新/etc/mosdns/domain_set/："
+    ls -l /etc/mosdns/domain_set/
+    if [ -x /etc/init.d/mosdns ];then
+        echo "重启mosdns"
+        /etc/init.d/mosdns restart
+    else
+        echo "未找到/etc/init.d/mosdns，请自行重启mosdns使新规则生效"
+    fi
+    echo "提示:这些txt写在/etc下会占用overlay空间;若要跟随上游最新数据，请先执行 openwrt-k update geodata"
+    echo "更新mosdns域名集完成"
 }
 
 download_failed() {
@@ -370,7 +479,7 @@ update_tool() {
         exit 1
         ;;
     esac
-    curl -L --retry 3 --connect-timeout 20 https://raw.githubusercontent.com/chenmozhijin/OpenWrt-K/main/files/usr/share/cmzj/openwrt-k_tool.sh -o $TMPDIR/openwrt-k_tool.sh || download_failed
+    curl -L --retry 3 --connect-timeout 20 https://raw.githubusercontent.com/vizaxe/OpenWrt-K/main/files/usr/share/cmzj/openwrt-k_tool.sh -o $TMPDIR/openwrt-k_tool.sh || download_failed
     chmod +x $TMPDIR/openwrt-k_tool.sh
     mv $TMPDIR/openwrt-k_tool.sh /usr/share/cmzj/openwrt-k_tool.sh && exit 0
 }
@@ -382,7 +491,7 @@ usage() {
     echo "Usage: openwrt-k <command> [<arguments>]"
     echo ""
     echo "Commands:"
-    echo "update <packages|rules|tool>              更新包/规则/本工具"
-    echo "info                                      打印固件信息"
+    echo "update <packages|rules|geodata|mosdns|tool>  更新包/规则/xray分流数据/mosdns域名集/本工具"
+    echo "info                                        打印固件信息"
 }
 main

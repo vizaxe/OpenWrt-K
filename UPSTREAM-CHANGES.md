@@ -91,6 +91,10 @@
 | UC-0017 | 2026-09-29 | 新增插件 | mosdns（`[38]`，取自 immortalwrt/packages `net/mosdns`）；并把 ddns-go 的启用开关补到 x86_64 | `config/{x86_64,rpi4b}/OpenWrt-K/extpackages.config`、`config/default-extpackages.config`、`config/x86_64/network.config`、`config/x86_64/luci.config`、`README.md`、`AGENTS.md` | 低 | 保留本地条目与开关 |
 | UC-0018 | 2026-09-29 | 预置文件 | 修复 xray 透明代理自环：`xray_output` 补 `meta mark 0xff` 让路、`mark` 移到 `tproxy` 之后、DIVERT 链限定 TCP、删除永不命中的 `myip` / `vps` 空集合、日志降级；并补登 `files/etc/xray/config.json` | `files/etc/nftables.d/xray.nft`、`files/etc/xray/config.json`、`files/etc/config/xray`、`AGENTS.md` | 中 | 保留本地修复；上游无同名文件，`xray-core` 与其 init 的改动须人工比对 |
 | UC-0019 | 2026-09-29 | 预置文件 | 构建期下载 xray geodata（Loyalsoldier 数据集：`geoip.dat` + `geosite.dat`）到 `/usr/share/xray/`，补齐 UC-0018 遗留的"分流数据缺失"缺口；URL 用 `releases/latest/download`（跟随最新，不加锁版本） | `build_helper/prepare.py`、`AGENTS.md` | 低 | 保留本地下载任务；上游若自带 geodata 下载逻辑，需人工比对其数据源与目标路径 |
+| UC-0020 | 2026-09-30 | 脚本改动 | 新增 geosite 解析工具 `build_helper/utils/geosite.py`（纯标准库）与域名集清单 `config/geosite-domainset.config`；构建期用刚下载的 `geosite.dat` 刷新 mosdns 的 `domain_set/*.txt`（默认 4 个 tag，可配置） | `build_helper/utils/geosite.py`（新增）、`config/geosite-domainset.config`（新增）、`build_helper/prepare.py`、`AGENTS.md` | 低 | 保留本地工具与清单；上游无同名文件，`prepare.py` 的下载段落若被上游改写需重新定位生成调用 |
+| UC-0021 | 2026-09-30 | 脚本改动 | 新增 `build_helper/utils/adguardhome.py`；`prepare.py` 的 AdGuardHome 过滤器清单改为读取 `adguardhome.yaml` 中 `enabled: true` 的条目（缓存文件名取 filter `id`），并删除上游硬编码的第三方订阅字典 | `build_helper/utils/adguardhome.py`（新增）、`build_helper/prepare.py`、`AGENTS.md`、`UPSTREAM-CHANGES.md` | 中 | 保留本地做法；上游若更新其订阅源列表，本地有意不跟（清单以配置为准） |
+| UC-0022 | 2026-09-30 | 脚本改动 | 上游 DNS 分流清单改为"配置引用才下载"：读 `adguardhome.yaml` 的 `dns.upstream_dns_file`，非空时下载到该路径、为空则跳过（原先无条件下载约 1.4 MiB 且无人引用） | `build_helper/utils/adguardhome.py`、`build_helper/prepare.py`、`AGENTS.md` | 中 | 保留本地做法；上游若更新清单地址，需同步工具里的 `UPSTREAM_DNS_LIST_URL` |
+| UC-0023 | 2026-09-30 | 预置文件 | `openwrt-k_tool.sh`：AdGuardHome 规则更新改为按 `upstream_dns_file` 配置走（并修掉恒不成立的 `smartdns` 前置条件）；新增 `update geodata`（更新 xray 的 geoip/geosite）与 `update mosdns`（用固件内 python3 + `geosite.py` 从 `/usr/share/xray/geosite.dat` 解出域名集）；`prepare.py` 顺带把工具与清单放进固件 | `files/usr/share/cmzj/openwrt-k_tool.sh`、`build_helper/prepare.py`、`build_helper/utils/geosite.py`、`AGENTS.md` | 中 | 保留本地实现；`openwrt-k_tool.sh` 属上游 `files/` 预置，上游更新该文件时需人工比对 |
 
 > 编号规则：`UC-####` 起顺序递增，**永不复用、永不重排**；撤销的条目保留行并标注"已撤销 + 日期 + 原因"。
 
@@ -332,7 +336,7 @@
 - 变更原因：按使用者的实际部署调整（上游接 SmartDNS、启用缓存与 DoH、更换订阅来源）。
 - 冲突风险：中 —— 该文件是本地预置内容，且改动面较大；上游若更新同一文件，冲突时以上游结构为准，再按上述清单重新套用本地取值
 - 上游同步动作：保留本地取值；上游改动该文件时逐项比对
-- 关联说明：由于订阅列表被替换，`files/etc/adguardhome/data/filters/` 下的 20 个预置缓存（7.7 MB）与当前 yaml 中的 filter id 已不对应，AdGuardHome 会重新下载所需的过滤器；这批缓存是否继续保留由使用者决定（`prepare.py` 当前仍在维护它们）。
+- 关联说明：由于订阅列表被替换，`files/etc/adguardhome/data/filters/` 下的 20 个预置缓存（7.7 MB）与当前 yaml 中的 filter id 已不对应，AdGuardHome 会重新下载所需的过滤器；这批缓存是否继续保留由使用者决定（`prepare.py` 当前仍在维护它们）。（**2026-09-30 订正，见 UC-0021**：实测现为 12 个缓存、约 12 MiB，且与 yaml 中 `enabled: true` 的 filter id 一一对应；"不对应、会被重新下载"的描述已不成立，该批缓存现由构建期按配置持续刷新。）
 - 文档同步：AGENTS.md 第 4.2 节已同步路径 ☑
 - 后续变更：**已被 UC-0011 取代**（改用官方包后，主配置文件名与选项体系随官方方案变化；yaml 内容本身仍沿用）
 - 链路变化：`upstream_dns` 的 `tcp://127.0.0.1:5335` 保持不变，但该端口上的服务已由 SmartDNS 换为 **mosdns**（见 UC-0013）
@@ -591,6 +595,119 @@
   - `.gitignore` 未忽略 `workdir/`，本地执行 prepare 后工作区会出现约 26 MiB 未跟踪文件（本次未处理，需要时再补忽略规则）；
   - 固件体积：x86_64 与 rpi4b 均增加约 26.3 MiB。
 - 文档同步：AGENTS.md 第 3.4 / 4.2 节已更新 ☑
+- 相关提交：——
+
+### UC-0020 · 脚本改动 · geosite 解析工具与 mosdns 域名集构建期刷新
+
+- 日期：2026-09-30
+- 变更类型：脚本改动（新增本地工具与清单；`prepare.py` 在下载段落之后追加调用）
+- 涉及文件：
+  - build_helper/utils/geosite.py（新增）
+  - config/geosite-domainset.config（新增）
+  - build_helper/prepare.py（`wait_dl_tasks()` 之后读清单并生成域名集）
+  - AGENTS.md
+- 上游对照：上游既没有 geosite 解析工具，也没有"`geosite.dat` → mosdns `domain_set` 文本"的转换环节（上游的域名集是离线人工维护的快照）
+- 本地行为：
+  - 新增 `build_helper/utils/geosite.py`：**纯标准库**解析 protobuf（`GeoSiteList{entry: GeoSite{country_code, domain: Domain{type, value}}}`），不依赖 `httpx` / `actions-toolkit`，可脱离 CI 直接运行；导出 `parse_geosite()` / `load_domainset_config()` / `write_domainset()` 三个函数与 CLI（`--list` 列 tag、`--tag` 预览或导出单个 tag、`--all` 导出全部、`--config … --out …` 按清单批量生成）；
+  - 新增 `config/geosite-domainset.config`：一行一项 `输出文件名=geosite tag`（当前 4 项：`category-ads-all` / `gfw` / `github` / `google`），空行与 `#` 注释忽略，行尾 ` #` 注释同样忽略；文件缺失或没有有效项表示"不生成任何文件"；
+  - `prepare.py`：在 `wait_dl_tasks(dl_tasks)` 之后读取清单，把刚下载到 `workdir/files/usr/share/xray/geosite.dat` 的数据解成 `workdir/files/etc/mosdns/domain_set/<文件名>`，每项打一条 INFO 日志（文件名 + 条数）；
+  - 匹配方式映射：`Domain(2)` → 裸域名（后缀匹配）、`Full(3)` → `full:`、`Regex(1)` → `regexp:`、`Plain(0)` → `keyword:`（数据源若已自带前缀则不重复添加）；输出保持数据源顺序并去重、LF 结尾，因此同一份 `geosite.dat` 必得同一份文本，便于 diff；
+  - 某个 tag 在数据里不存在时只告警并跳过该文件，**不删除既有快照**（避免"上游改分类名"反而把可用数据清空）。
+- 变更原因：
+  - 仓库里的 4 份 txt 与 xray 用的 `geosite.dat` 本是同源数据，但快照靠离线更新，必然漂移。用当天数据实测重新解析后：`geosite_github.txt` 64 → 64 **完全一致**（同时验证了格式映射与工具正确性）、`geosite_gfw.txt` 4352 → 4370（新增 18、无删减）、`geosite_google.txt` 1073 → 1077（新增 5、删除 1）、`geosite_category-ads-all.txt` 188591 → 185720（广告域名流动性大，增 8695 / 删 11566）；
+  - 顺带把"怎么解 geosite.dat"固化成工具，日后换 tag、排障都不必再临时写脚本。
+- 冲突风险：低 —— 两个新增文件上游都不存在；`prepare.py` 只是在下载段落末尾追加一段调用
+- 上游同步动作：保留本地工具与清单；若上游日后自带 geosite → domain_set 的转换逻辑，比对其映射规则后择一保留
+- 注意事项：
+  - 工具不依赖第三方库：`python3 build_helper/utils/geosite.py --list` 在任何装了 CPython 的机器上都能跑；
+  - 生成结果只覆盖 `workdir/files/` 下的**副本**，仓库内的快照文件不会被改写（构建产物不入 git）；
+  - 若要给 mosdns 增加域名集，只需在清单里加一行，并确认 `files/etc/mosdns/config.yaml` 里引用了对应文件；
+  - `--all` 会导出 1549 个文件，体积远超当前 4 份（约 4 MB），非必要不要用。
+- 文档同步：AGENTS.md 第 1 节 / 第 4.2 节已更新 ☑
+- 相关提交：——
+
+### UC-0021 · 脚本改动 · AdGuardHome 过滤器清单改由配置驱动
+
+- 日期：2026-09-30
+- 变更类型：脚本改动（新增本地工具；`prepare.py` 删除上游硬编码字典、改为读配置）
+- 涉及文件：
+  - build_helper/utils/adguardhome.py（新增）
+  - build_helper/prepare.py（`filters = {...}` 硬编码字典整段替换为函数调用）
+  - AGENTS.md
+- 上游对照：上游 `prepare.py`（L167–L197）硬编码 17 个黑名单 + 5 个白名单订阅源，缓存文件名用"订阅添加时间戳"；本 fork 先前原样保留该段，只有落点路径不同（UC-0009）
+- 本地行为：
+  - 新增 `build_helper/utils/adguardhome.py`：用 **PyYAML**（`requirements.txt` 中已有的 `pyyaml`，**不是新增依赖**）读取 `files/etc/adguardhome/adguardhome.yaml`，收集 `filters` 里 `enabled` 为真、且 `url` / `id` 齐备的条目，输出 `{<id>.txt: 下载地址}`；导出 `load_filter_downloads()` 与 CLI（`python3 build_helper/utils/adguardhome.py <yaml>` 可预览清单）；
+  - **缓存文件名取 filter 的 `id`** —— AdGuardHome 正是按 id 在 `data/filters/` 下寻找 `<id>.txt`，这一步决定了"预置是否真的被用上"；`id` 强制要求纯数字，既与它的约定一致，也避免异常字符进入文件名；
+  - `prepare.py`：删除上游那份硬编码字典，改为 `load_filter_downloads(<workdir>/files/etc/adguardhome/adguardhome.yaml)` 后照旧逐个提交 `dl2`；
+  - 容错：配置文件缺失、YAML 解析失败、缺少 `filters` 列表 → 只告警并跳过下载（不会因配置写坏而中断构建）；单条缺 `url` / 数字 `id` 只跳过该条；`id` 重复以先出现者为准。
+- 变更原因：
+  - 原硬编码清单与固件实际配置**早已脱节**：yaml 只引用 `adguardteam.github.io` 的 14 条过滤器（12 条 enabled / 2 条 disabled），而硬编码清单下的是 anti-ad、easylist、mvps 等第三方源，文件名（时间戳）与 yaml 的 filter id **交集为空** —— 那批文件 AdGuardHome 根本不会读取，属孤儿缓存；
+  - 使用者的 yaml 会变（网页端增删过滤器、调整 enabled），硬编码清单只会越拖越偏；改为读配置后"配置改了就跟着变"；
+  - 实测（2026-09-30）：从当前 yaml 解析出 **12 条**下载项并全部下载成功，缓存名与 yaml 中 `enabled: true` 的 id 一一对应；与仓库内既有缓存相比 11 个略增、1 个略减（如 `1790128202.txt` 20873 → 21225 字节，`1790164439.txt` 4831238 → 4682759 字节），说明这批快照确实已陈旧、构建期刷新有价值。
+- 冲突风险：中 —— 删除了上游 `prepare.py` 里的整段字典（该区域上游仍可能继续改动）
+- 上游同步动作：保留本地做法。上游若更新其订阅源列表，本地**有意不跟**（清单以 `adguardhome.yaml` 为准）；若上游也改为配置驱动，需比对其读取字段与缓存命名规则
+- 注意事项：
+  - 下载内容就是订阅原文，与 AdGuardHome 自己写出的缓存格式一致（仓库内既有缓存同样是无元数据头的规则文本），因此首次开机即可离线使用；若 AdGuardHome 判定缓存过期，它仍会自行联网刷新；
+  - 预置文件名 = filter `id`；网页端新加的过滤器若尚未写入 `id`，会被跳过并打印告警（正常保存配置时 AdGuardHome 会带上 id）；
+  - **不清理孤儿缓存**：yaml 中已删除、但 `data/filters/` 里仍留存的 `.txt` 需人工处理（本次未动）；
+  - UC-0011 第 336 行"20 个预置缓存（7.7 MB）与 filter id 已不对应"的记载已过期，现状为 12 个 / 约 12 MiB 且与 yaml 对齐 —— 该行已就地标注订正。
+- 文档同步：AGENTS.md 第 4.2 节已更新 ☑
+- 相关提交：——
+
+### UC-0022 · 脚本改动 · 上游 DNS 分流清单改为"配置引用才下载"
+
+- 日期：2026-09-30
+- 变更类型：脚本改动（`prepare.py` 的条件化下载 + 工具新增配置读取）
+- 涉及文件：
+  - build_helper/utils/adguardhome.py（新增 `load_upstream_dns_file()` 与常量 `UPSTREAM_DNS_LIST_URL`）
+  - build_helper/prepare.py（该清单从"无条件下载到写死路径"改为"按配置下载到配置路径"）
+  - AGENTS.md
+- 上游对照：上游无条件下载该清单到写死的 `files/etc/AdGuardHome-dnslist(by cmzj).yaml`
+- 本地行为：
+  - 下载地址移入工具作为常量 `UPSTREAM_DNS_LIST_URL`（配置里只有本地路径、没有来源 URL，地址本身仍固定）；
+  - 读取 `adguardhome.yaml` 的 `upstream_dns_file`：**非空才下载**，为空则记一条 INFO 并跳过；
+  - 落点直接取自该配置值 —— 它是设备内绝对路径（如 `/etc/AdGuardHome-dnslist(by cmzj).yaml`），转成 `files/` 之下的相对路径后拼到 `global_files_path`，于是"配置里写哪个路径，固件里就落哪个路径"；
+  - 路径校验：只接受以 `/` 开头的绝对路径且拒绝含 `..`，否则告警跳过（该值参与拼装落盘位置，必须挡住"写什么就能落到哪里"）。
+- 变更原因：
+  - 原先无条件下载（实测 1,473,012 字节 ≈ 1.4 MiB），而主配置 `dns.upstream_dns_file` 为空、AdGuardHome 根本不读它 —— 纯属浪费构建时间与固件体积；
+  - 原先落点写死 `/etc/AdGuardHome-dnslist(by cmzj).yaml`，与配置里的路径可能不一致；现在二者自动一致，改配置即改落点。
+- 冲突风险：中 —— 改动了上游 `prepare.py` 该行，并把其 URL 常量搬进了本地工具
+- 上游同步动作：保留本地做法；上游若更新清单地址，需同步 `UPSTREAM_DNS_LIST_URL`（该地址已不在 `prepare.py` 里）
+- 注意事项：
+  - **键的位置随 AdGuardHome 版本变化**：新版把 `upstream_dns_file` 放在 `dns` 段下，旧版在顶层 —— 首次实现只查顶层时永远取不到值（本次实测踩到），现两处都查；日后上游若再挪位置，改这一个函数即可；
+  - `files/usr/share/cmzj/openwrt-k_tool.sh` 里的"手动更新 AdGuardHome 上游 DNS 分流规则"仍写死 `/etc/AdGuardHome-dnslist(by cmzj).yaml`：把配置路径改到别处时，需同步该脚本（本次未动）；
+  - 实测把配置改成引用该清单后，构建期会下载约 1.4 MiB 到配置指定的路径（内容首行为 `127.0.0.1:6053` 一类的上游 DNS 写法）。
+- 文档同步：AGENTS.md 第 4.2 节已更新 ☑
+- 相关提交：——
+
+### UC-0023 · 预置文件 · openwrt-k 工具：AdGuardHome 规则按配置更新 + 新增 geodata / mosdns 子命令
+
+- 日期：2026-09-30
+- 变更类型：预置文件（`files/usr/share/cmzj/openwrt-k_tool.sh` 本地定制 + `prepare.py` 附带投放工具）
+- 涉及文件：
+  - files/usr/share/cmzj/openwrt-k_tool.sh
+  - build_helper/prepare.py（构建期把域名集清单与 `geosite.py` 放进固件）
+  - build_helper/utils/geosite.py（`urllib` 改为按需导入，便于在固件的精简 Python 环境里跑本地文件模式）
+  - AGENTS.md
+- 上游对照：上游脚本只有 `update packages/rules/tool`；`rules` 里的 AdGuardHome 段以 `has_package luci-app-adguardhome && has_package smartdns` 为前提，并把清单路径写死为 `/etc/AdGuardHome-dnslist(by cmzj).yaml`
+- 本地行为：
+  - **AdGuardHome 段改成按配置走**：从 `/etc/adguardhome/adguardhome.yaml`（回退 `/etc/AdGuardHome.yaml`）读 `upstream_dns_file`（兼容顶层与 `dns` 段、剥引号与行尾注释），为空则提示"未引用、跳过更新"，非空则下载清单写到该路径并重启 AdGuardHome；
+  - **前置条件修正**：本 fork 已用 mosdns 取代 SmartDNS（UC-0013），`&& has_package smartdns` 恒不成立、这段逻辑从未执行过；现改为"检测到 `luci-app-adguardhome` 或 `adguardhome` 即执行"；
+  - **新增 `openwrt-k update geodata`**：从 `Loyalsoldier/v2ray-rules-dat` 的 `releases/latest/download` 下载 `geoip.dat` + `geosite.dat`（两个都下完才替换，避免只换一半），落到 `/usr/share/xray/`，随后重启 xray，并提示"mosdns 域名集不会自动跟随"；
+  - **新增 `openwrt-k update mosdns`**：**数据源就是 `/usr/share/xray/geosite.dat`**（与 xray 严格同源），用固件内 python3 执行 `/usr/share/cmzj/geosite.py`，按 `/etc/mosdns/domainset.list` 清单解出 `domain_set/*.txt`（只覆盖非空文件），随后重启 mosdns；缺 python3 / 缺工具 / 缺 dat / 缺清单时给出明确报错与指引（提示先跑 `update geodata`）；
+  - `prepare.py` 在构建期把 `config/geosite-domainset.config` 复制为固件内 `/etc/mosdns/domainset.list`、把 `build_helper/utils/geosite.py` 复制为 `/usr/share/cmzj/geosite.py`，使设备端与构建期共用同一份清单与同一套解析实现。
+- 变更原因：
+  - 原 AdGuardHome 段在本 fork 里**永远不会执行**（前置依赖 smartdns；且路径写死，与配置漂移——见 UC-0022）；
+  - 设备端过去只能等重新刷机才能更新分流数据；现在可以在设备上分别刷新 xray 的 dat 与 mosdns 的文本规则，且二者永远同源；
+  - 为什么不引入 `v2dat` / `geoview` 这类二进制：mosdns v5 **不支持读 `.dat`**（<https://github.com/IrineSistiana/mosdns/issues/596>），其 v5.3.3 的 `tools` 子命令也只有 `config` / `probe`、**没有 `v2dat`**；而固件里本就有 python3（两目标各 24 个 `python3-*` 开关），复用纯标准库的 `geosite.py` 既不增体积也不增依赖。
+- 冲突风险：中 —— `openwrt-k_tool.sh` 是上游 `files/` 预置文件，整段替换了其中的 AdGuardHome 逻辑并新增两个子命令
+- 上游同步动作：保留本地实现；上游更新该脚本时需人工比对（尤其 AdGuardHome 段与 usage）
+- 注意事项：
+  - `update mosdns` **不联网**（只读本地 `geosite.dat`）；要跟随上游最新数据需先执行 `update geodata`；
+  - 解出的 txt 写在 `/etc/mosdns/domain_set/` 会占用 overlay 空间（当前 4 个文件约 4 MB），脚本里有提示；
+  - 某个 tag 在上游数据里缺失时 `geosite.py` 只告警并跳过，**不会清空**既有文件；
+  - 校验方式：`sh -n files/usr/share/cmzj/openwrt-k_tool.sh`；本机实测了 `upstream_dns_file` 的 sed 提取（带引号 / 空值两种写法）与"从本地 geosite.dat 按清单解包"的全流程（产出条数与构建期一致：185720 / 4370 / 64 / 1077）。
+- 文档同步：AGENTS.md 第 4.2 节已更新 ☑
 - 相关提交：——
 
 ### 新增条目模板

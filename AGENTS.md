@@ -32,6 +32,7 @@
 | --- | --- | --- |
 | `config/OpenWrt.config` | 声明启用哪些编译目标（`config=` 逗号分隔） | 高 |
 | `config/default-extpackages.config` | 默认拓展包清单（模板 / 参考，不参与运行时解析） | 中 |
+| `config/geosite-domainset.config` | **mosdns 域名集清单**（本地新增；一行一项 `输出文件名=geosite tag`，构建期据此从 `geosite.dat` 生成 `domain_set/*.txt`，见 UC-0020）。留空或删除即不生成 | 低 |
 | `config/<目标>/` | 单个编译目标的完整配置目录 | 高 |
 | `config/<目标>/*.config` | 顶层配置片段，会被拼接成 OpenWrt `.config` | 高 |
 | `config/<目标>/OpenWrt-K/compile.config` | OpenWrt 版本、kmod 排除表、是否用缓存 | 高 |
@@ -243,17 +244,17 @@
 | `files/etc/config/xray` | 预置 xray 的 uci 配置：`enabled=1` + `confdir=/etc/xray`；主配置由上面的 `config.json` 预置，出站节点需自行填写 |
 | `files/etc/nginx/nginx.conf` | nginx **自管配置**（uci_enable=false 时接管）：加载 `module.d/*.module`、`http` 段 include `conf.d/*.conf`、顶层 `stream` 段 include `stream.d/*.conf`；**不监听 80/443**，仅用于自定义端口反代 |
 | `files/etc/adguardhome/adguardhome.yaml` | AdGuardHome 主配置（官方方案的 `config_file`）。内容已按本地环境调整（见 UC-0010），包方案见 UC-0011 |
-| `files/etc/adguardhome/data/filters/` | AdGuardHome 工作目录（官方 `work_dir`，本地设为 `/etc/adguardhome`）下的订阅缓存，编译期由 `prepare.py` 下载刷新；二进制由官方 `adguardhome` 包编译提供，装到 `/usr/bin/AdGuardHome` |
-| `files/etc/AdGuardHome-dnslist(by cmzj).yaml` | 由 `prepare.py` **构建期下载生成**（不纳入版本控制）；当前主配置已清空 `upstream_dns_file`，该清单实际未被引用 |
+| `files/etc/adguardhome/data/filters/` | AdGuardHome 工作目录（官方 `work_dir`，本地设为 `/etc/adguardhome`）下的过滤器缓存。**构建期由 `prepare.py` 按 `files/etc/adguardhome/adguardhome.yaml` 里 `filters` 中 `enabled: true` 的条目重新下载**，缓存文件名取 filter 的 `id`（AdGuardHome 正是按 id 去找 `<id>.txt`，名字对不上等于没预置）；清单不再硬编码，改配置即随之变化（见 UC-0021）。二进制由官方 `adguardhome` 包编译提供，装到 `/usr/bin/AdGuardHome` |
+| `files/etc/AdGuardHome-dnslist(by cmzj).yaml` | **仅当** `files/etc/adguardhome/adguardhome.yaml` 的 `dns.upstream_dns_file` 非空时才由 `prepare.py` 下载，**落点直接用配置里写的那个路径**（二者不会再各自为政）；当前该键为空，故构建期**不下载**、固件里也没有这个文件（见 UC-0022）。设备端 `openwrt-k update rules` 同样按该配置决定是否更新，不再写死路径（见 UC-0023） |
 | `files/etc/mosdns/config.yaml` | mosdns 主配置（使用者提供）：UDP/TCP 监听 `:5335`（AdGuardHome 的上游）、`http_server` 监听 `:8443`；含 hosts、缓存、双栈 ECS（`ecs_handler` × 2 由 `qtype` 分派）、域名分流（block / proxy / direct / easytier / dhcp）与 DoT 上游。本体取自 immortalwrt/packages（**官方 feed 没有此包**，见第 4.1 节第 38 项），不依赖任何自定义分支。构建期由 `files/` 覆盖包自带的默认配置 |
-| `files/etc/mosdns/domain_set/` | 域名分流规则文本（`geosite_category-ads-all` / `geosite_gfw` / `geosite_github` / `geosite_google`，约 4 MB，随固件落地） |
+| `files/etc/mosdns/domain_set/` | 域名分流规则文本（`geosite_category-ads-all` / `geosite_gfw` / `geosite_github` / `geosite_google`，约 4 MB）。**仓库内存放的是快照**：构建期由 `prepare.py` 调用 `build_helper/utils/geosite.py`，从刚下载的 `geosite.dat` 重新解出并覆盖（清单见 `config/geosite-domainset.config`，见 UC-0020）。**设备端**可用 `openwrt-k update mosdns` 从 `/usr/share/xray/geosite.dat` 重新解出同一批文件（见 UC-0023）；xray 与 mosdns 从此用同一份数据，不会再各自漂移 |
 | `files/etc/mosdns/ip_set/` | IP 集合规则（`geoip_private.txt`）；当前配置尚未引用，属预留 |
 | `files/etc/uci-defaults/zzz-chenmozhijin` | 首次开机写入 LAN 地址、dnsmasq 缓存开关、aria2 配置、固件署名（AdGuardHome 相关已拆出，SmartDNS 相关随换用 mosdns 移除） |
 | `files/etc/uci-defaults/zzz-adguardhome` | AdGuardHome 首次开机配置（官方方案的 uci 选项 + dnsmasq 上游指向）；从 `zzz-chenmozhijin` 拆出，自带 `has_package` 与等待逻辑，不再使用时直接删本文件即可 |
 | `files/etc/uci-defaults/zzz-mosdns` | 启用并启动 mosdns（mosdns 包的 postinst 会 stop + disable，必须显式 enable）；配置缺失时不启动 |
 | `files/etc/uci-defaults/zzz-nginx` | 关闭 nginx 的 uci 管理（`nginx.global.uci_enable=false`）使自管 `nginx.conf` 接管，并清理可能残留的 uci.conf、启用服务 |
-| `files/usr/share/cmzj/openwrt-k_tool.sh` | 让固件支持 `openwrt-k` 命令升级非官方源软件包 |
-| `files/usr/share/xray/geoip.dat`、`geosite.dat` | 由 `prepare.py` **构建期下载生成**（不纳入版本控制）：取自 `Loyalsoldier/v2ray-rules-dat` 的 `releases/latest/download`，固件内固定路径 `/usr/share/xray/`（与 `/etc/config/xray` 的 `datadir`、覆盖版 init 的 `XRAY_LOCATION_ASSET` 一致，xray 只认这两个文件名）。⚠️ **必须用 Loyalsoldier 数据集**：它提供 `geosite:gfw` 与 `geoip:facebook` / `google` / `netflix` / `telegram` / `twitter` 等组织标签；官方 feed 的 `v2ray-geodata` 是 v2fly 数据、上述类别缺失（见 UC-0019）。约 26.3 MiB（15.86 + 10.46） |
+| `files/usr/share/cmzj/openwrt-k_tool.sh` | 让固件支持 `openwrt-k` 命令升级非官方源软件包与规则：原有 `update packages/rules/tool`，本 fork 新增 `update geodata`（更新 xray 的 `geoip.dat` / `geosite.dat` 并重启 xray）与 `update mosdns`（按清单从 `/usr/share/xray/geosite.dat` 解出 `domain_set/*.txt` 并重启 mosdns），见 UC-0023。`rules` 里的 AdGuardHome 段也已改为按 `upstream_dns_file` 配置决定是否更新。⚠️ 同目录的 `geosite.py`（解包工具）与 `/etc/mosdns/domainset.list`（清单）都由 `prepare.py` 在构建期放入固件，不在版本控制中 |
+| `files/usr/share/xray/geoip.dat`、`geosite.dat` | 由 `prepare.py` **构建期下载生成**（不纳入版本控制）：取自 `Loyalsoldier/v2ray-rules-dat` 的 `releases/latest/download`，固件内固定路径 `/usr/share/xray/`（与 `/etc/config/xray` 的 `datadir`、覆盖版 init 的 `XRAY_LOCATION_ASSET` 一致，xray 只认这两个文件名）；设备端可用 `openwrt-k update geodata` 更新（见 UC-0023）。⚠️ **必须用 Loyalsoldier 数据集**：它提供 `geosite:gfw` 与 `geoip:facebook` / `google` / `netflix` / `telegram` / `twitter` 等组织标签；官方 feed 的 `v2ray-geodata` 是 v2fly 数据、上述类别缺失（见 UC-0019）。约 26.3 MiB（15.86 + 10.46） |
 
 ### 4.3 补丁
 
