@@ -135,12 +135,21 @@ def load_domainset_config(path: str) -> dict[str, str]:
     return mapping
 
 
-def write_domainset(data: bytes, mapping: dict[str, str], out_dir: str) -> dict[str, int]:
-    """按清单把 geosite.dat 写成域名集文本, 返回 {文件名: 条数}。
+def write_domainset(source: str | bytes, mapping: dict[str, str], out_dir: str) -> dict[str, int]:
+    """按清单把 geosite 数据写成域名集文本, 返回 {文件名: 条数}。
+
+    ``source`` 既可以是已读入的 bytes, 也可以是本地路径或 http(s) 地址(交给
+    ``_load_source``) —— prepare 阶段直接传 ``geosite.dat`` 的路径即可, 库与 CLI
+    两种用法由此统一。⚠️ 这里原先只接受 bytes, 而调用方传的是路径, 结果构建期
+    在 `_varint` 里对字符串做位运算而崩溃(见 UC-0024)。
 
     tag 名称大小写不敏感。某个 tag 在数据里不存在(例如上游改了分类名)时只告警并
     跳过该文件, 不删除既有快照, 避免"生成失败反而把可用数据清空"。
     """
+    if not isinstance(source, (str, bytes)):
+        msg = f"source 类型不支持, 需要 str 路径/URL 或 bytes 数据: {type(source).__name__}"
+        raise TypeError(msg)
+    data = _load_source(source) if isinstance(source, str) else source
     sources = {name.upper(): items for name, items in parse_geosite(data).items()}
     stats: dict[str, int] = {}
     os.makedirs(out_dir, exist_ok=True)

@@ -95,6 +95,7 @@
 | UC-0021 | 2026-09-30 | 脚本改动 | 新增 `build_helper/utils/adguardhome.py`；`prepare.py` 的 AdGuardHome 过滤器清单改为读取 `adguardhome.yaml` 中 `enabled: true` 的条目（缓存文件名取 filter `id`），并删除上游硬编码的第三方订阅字典 | `build_helper/utils/adguardhome.py`（新增）、`build_helper/prepare.py`、`AGENTS.md`、`UPSTREAM-CHANGES.md` | 中 | 保留本地做法；上游若更新其订阅源列表，本地有意不跟（清单以配置为准） |
 | UC-0022 | 2026-09-30 | 脚本改动 | 上游 DNS 分流清单改为"配置引用才下载"：读 `adguardhome.yaml` 的 `dns.upstream_dns_file`，非空时下载到该路径、为空则跳过（原先无条件下载约 1.4 MiB 且无人引用） | `build_helper/utils/adguardhome.py`、`build_helper/prepare.py`、`AGENTS.md` | 中 | 保留本地做法；上游若更新清单地址，需同步工具里的 `UPSTREAM_DNS_LIST_URL` |
 | UC-0023 | 2026-09-30 | 预置文件 | `openwrt-k_tool.sh`：AdGuardHome 规则更新改为按 `upstream_dns_file` 配置走（并修掉恒不成立的 `smartdns` 前置条件）；新增 `update geodata`（更新 xray 的 geoip/geosite）与 `update mosdns`（用固件内 python3 + `geosite.py` 从 `/usr/share/xray/geosite.dat` 解出域名集）；`prepare.py` 顺带把工具与清单放进固件 | `files/usr/share/cmzj/openwrt-k_tool.sh`、`build_helper/prepare.py`、`build_helper/utils/geosite.py`、`AGENTS.md` | 中 | 保留本地实现；`openwrt-k_tool.sh` 属上游 `files/` 预置，上游更新该文件时需人工比对 |
+| UC-0024 | 2026-09-30 | 脚本修复 | 修复 `write_domainset()` 的参数类型 bug：它只接受 `bytes`，而 `prepare.py` 传的是**路径字符串**，导致 CI 在 `_varint` 里对字符串做位运算而整体失败；现同时接受 `str`（路径/URL）与 `bytes`，并对其它类型抛出明确报错 | `build_helper/utils/geosite.py` | 低 | 保留本地修复（该函数是本地新增，上游无对应实现） |
 
 > 编号规则：`UC-####` 起顺序递增，**永不复用、永不重排**；撤销的条目保留行并标注"已撤销 + 日期 + 原因"。
 
@@ -708,6 +709,29 @@
   - 某个 tag 在上游数据里缺失时 `geosite.py` 只告警并跳过，**不会清空**既有文件；
   - 校验方式：`sh -n files/usr/share/cmzj/openwrt-k_tool.sh`；本机实测了 `upstream_dns_file` 的 sed 提取（带引号 / 空值两种写法）与"从本地 geosite.dat 按清单解包"的全流程（产出条数与构建期一致：185720 / 4370 / 64 / 1077）。
 - 文档同步：AGENTS.md 第 4.2 节已更新 ☑
+- 相关提交：——
+
+### UC-0024 · 脚本修复 · write_domainset() 参数类型与调用方不一致
+
+- 日期：2026-09-30
+- 变更类型：脚本修复（UC-0020 引入的函数）
+- 涉及文件：
+  - build_helper/utils/geosite.py
+- 上游对照：该函数是本地新增，上游没有对应实现
+- 现象：CI 在 prepare 阶段直接失败，报 `TypeError: unsupported operand type(s) for &: 'str' and 'int'`，栈为 `prepare.py:228 → geosite.py:144 write_domainset → parse_geosite → _fields → _varint`
+- 根因：`write_domainset(source, mapping, out_dir)` 的第一版签名只接受 **bytes 数据**，而 `prepare.py` 实际传入的是 **`geosite.dat` 的路径字符串**；对字符串下标取值得到的是单个字符 str，`byte & 0x7F` 因类型不符而抛错。函数的设计意图（接收数据）与构建期的调用约定（传路径）没有对齐
+- 本地行为（修复后）：
+  - `source` 同时接受 `str`（本地路径或 http(s) 地址，交给 `_load_source`）与 `bytes`（已读入的数据），两种形态产出**逐字节一致**；
+  - 其它类型（如 int）直接抛 `TypeError`，消息点明"需要 str 路径/URL 或 bytes 数据"，避免再次落到 `_varint` 里报出难以理解的天书
+- 变更原因：**CI 崩溃**。教训一并记下，供下次验证参考：
+  - 之前本地只验证了"传 bytes"的形态（自己读文件后传入），**漏掉了调用方实际传路径的那条路**，而那段代码只有整跑 CI 才会触发；
+  - 因此对 `utils/*.py` 的公开函数做本地验证时，应**照抄调用方在 `prepare.py` 里的实参形态**（路径就传路径、bytes 就传 bytes），而不是按自己方便构造调参
+- 冲突风险：低 —— 纯本地新增文件的内部修复
+- 上游同步动作：无（上游无该文件）
+- 注意事项：
+  - 验证记录：路径形态 `write_domainset("<…>/geosite.dat", mapping, out)` 产出 185720 / 4370 / 64 / 1077 条，与构建期一致；`bytes` 形态产出与之逐字节相同；CLI（`-s <file> -c <清单> -o <目录>`）同样通过；
+  - AGENTS.md 的功能描述未受影响，本次未改动
+- 文档同步：AGENTS.md 无需改动（功能描述未变）；本条即为修复记录 ☑
 - 相关提交：——
 
 ### 新增条目模板
